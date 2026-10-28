@@ -1,11 +1,5 @@
 <?php
-/**
- * sidebar.php: shared admin navigation.
- * Set $activePage ('dashboard' | 'reports' | 'map' | 'announcement' | 'personnel' | 'users' | 'settings')
- * before including. Needs auth.php to have run ($IS_SUPER_ADMIN, $ADMIN_NAME, $ADMIN_ROLE).
- * Self-contained: scoped CSS (cf-*), inline SVG, small JS. Works with or without Tailwind.
- * Wrap the page body in <div class="cf-content"> so it sits beside the sidebar.
- */
+
 $activePage = $activePage ?? '';
 $sbName     = $ADMIN_NAME ?? 'Administrator';
 $sbRole     = ucfirst(str_replace('_', ' ', $ADMIN_ROLE ?? 'staff'));

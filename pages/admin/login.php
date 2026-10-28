@@ -34,7 +34,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        // Plain-text password comparison (temp).
+        
         // Upgrade to password_verify() later.
         $stored = $found['password'] ?? '';
 

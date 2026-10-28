@@ -1,7 +1,7 @@
 <?php
 
 require_once __DIR__ . '/../../includes/auth.php';
-require_once __DIR__ . '/../../config/firebase.php';   // needed by the notification bell ($db)
+require_once __DIR__ . '/../../config/firebase.php';  
 
 // 🔒 Super admin only
 if (!$IS_SUPER_ADMIN) {

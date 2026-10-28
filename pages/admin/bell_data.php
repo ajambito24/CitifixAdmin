@@ -1,10 +1,5 @@
 <?php
-/**
- * bell_data.php: shared query for the notification bell.
- * Used by bell.php (first render) and bell_feed.php (live polling) so both always agree.
- * Returns ['ok' => bool, 'total' => int pending reports, 'items' => 5 newest pending [id, category, ts]].
- * Department scoping matches the dashboard/reports pages.
- */
+
 
 if (!function_exists('cf_bell_fetch')) {
     function cf_bell_fetch($db, bool $isSuper, $dept): array

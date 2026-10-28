@@ -1,8 +1,5 @@
 <?php
-/**
- * bell_feed.php: JSON endpoint polled by the notification bell.
- * Same auth and department scoping as the admin pages.
- */
+
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../config/firebase.php';
 require_once __DIR__ . '/bell_data.php';

@@ -1,16 +1,4 @@
 <?php
-/**
- * bell.php: notification bell for the admin top bar.
- * Include inside the header's right-hand flex group:  <?php require __DIR__ . '/bell.php'; ?>
- * Needs auth.php and firebase.php to have run ($db, $IS_SUPER_ADMIN, $ADMIN_DEPT).
- * Needs bell_data.php and bell_feed.php in the same folder.
- *
- * - Badge = number of pending reports; dropdown = 5 newest pending.
- * - Polls bell_feed.php every 45s (only while the tab is visible) and updates without a refresh.
- * - When a pending report appears that the page hasn't seen, the bell shakes and plays a short sound.
- *   Sound only plays after the admin has clicked or pressed a key on the page (browser rule).
- * - Each item links to reports.php?open=<id>, which opens that report's modal.
- */
 
 require_once __DIR__ . '/bell_data.php';
 

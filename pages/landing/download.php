@@ -1,5 +1,5 @@
 <?php
-// Public page: do NOT include includes/auth.php here.
+
 $pageTitle   = 'Download and how to use | CitiFix Manila';
 $currentPage = 'download';
 

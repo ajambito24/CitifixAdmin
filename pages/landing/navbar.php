@@ -1,8 +1,5 @@
 <?php
-/**
- * navbar.php — landing page navigation.
- * Set $currentPage ('home' | 'about' | 'download') before including.
- */
+
 $currentPage = $currentPage ?? '';
 
 $navLinks = [

@@ -1,5 +1,5 @@
 <?php
-// Public page: do NOT include includes/auth.php here.
+
 $pageTitle   = 'CitiFix Manila | Report problems in Sampaloc and track them to resolution';
 $currentPage = 'home';
 ?>

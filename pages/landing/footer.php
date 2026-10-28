@@ -1,7 +1,5 @@
 <?php
-/**
- * footer.php — landing page footer. No admin links on purpose.
- */
+
 ?>
 <footer class="bg-slate-900 text-slate-300" style="padding-bottom: env(safe-area-inset-bottom, 0px);">
     <div class="su-container grid gap-10 py-12 md:grid-cols-[1.5fr_1fr_1fr] md:py-16">

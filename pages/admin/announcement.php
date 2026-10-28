@@ -19,9 +19,7 @@ if (empty($_SESSION['csrf'])) {
 }
 $csrf = $_SESSION['csrf'];
 
-/**
- * Safely converts Firestore date values into a Manila DateTime.
- */
+
 function ann_parse_date($value): ?\DateTime
 {
     if ($value === null) return null;
