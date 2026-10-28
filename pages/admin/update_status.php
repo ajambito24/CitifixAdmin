@@ -1,8 +1,8 @@
 <?php
 
-require_once __DIR__ . '/includes/auth.php';
-require_once __DIR__ . '/config/firebase.php';
-require_once __DIR__ . '/config/department_map.php';
+require_once __DIR__ . '/../../includes/auth.php';
+require_once __DIR__ . '/../../config/firebase.php';
+require_once __DIR__ . '/../config/department_map.php';
 
 // 🔒 Only admins / super admins can update
 if (!can_edit_reports()) {

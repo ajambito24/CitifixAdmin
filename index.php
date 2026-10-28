@@ -6,9 +6,9 @@ if (
     isset($_SESSION['admin_logged_in']) &&
     $_SESSION['admin_logged_in'] === true
 ) {
-    header('Location: dashboard.php');
+    header('Location: pages/dashboard.php');
     exit;
 }
 
-header('Location: login.php');
+header('Location: pages/landing/homepages.php');
 exit;

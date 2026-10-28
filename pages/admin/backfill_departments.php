@@ -1,6 +1,6 @@
 <?php
-require_once __DIR__ . '/config/firebase.php';
-require_once __DIR__ . '/config/department_map.php';
+require_once __DIR__ . '/../../config/firebase.php';
+require_once __DIR__ . '/../../config/department_map.php';
 
 header('Content-Type: text/plain');
 
