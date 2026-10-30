@@ -2,7 +2,7 @@
 
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../config/firebase.php';
-require_once __DIR__ . '/../config/department_map.php';
+require_once __DIR__ . '/../../config/department_map.php';
 
 // 🔒 Only admins / super admins can update
 if (!can_edit_reports()) {
@@ -26,7 +26,8 @@ $adminNotes = trim($_POST['admin_notes'] ?? '');
 $allowedStatuses = [
     'pending',
     'in progress',
-    'resolved'
+    'resolved',
+    'rejected'
 ];
 
 if (
@@ -59,12 +60,12 @@ try {
 
     $current = $snapshot->data();
 
-    // 🔒 Department guard — super admin bypasses this
+    // 🔒 Assignment guard — super admin bypasses this
     if (!$IS_SUPER_ADMIN) {
-        if (($current['departmentId'] ?? null) !== $ADMIN_DEPT) {
+        if (($current['assignedAdminId'] ?? null) !== $ADMIN_ID) {
             $_SESSION['flash'] = [
                 'type' => 'error',
-                'msg'  => 'Access denied: this report belongs to another department.'
+                'msg'  => 'Access denied: this report is not assigned to you.'
             ];
             header('Location: reports.php');
             exit;
@@ -108,6 +109,46 @@ try {
     } else {
         $updateData['resolvedAt'] = null;
         $updateData['isResolved'] = false;
+    }
+
+    // 🔒 Assignment — super admin only
+    if ($IS_SUPER_ADMIN && isset($_POST['assigned_admin_id'])) {
+        $assignedId      = trim($_POST['assigned_admin_id']);
+        $currentAssigned = (string) ($current['assignedAdminId'] ?? '');
+
+        if ($assignedId === $currentAssigned) {
+            // Unchanged — keep the assignment, but sync the report's department
+            // with the assigned admin's department (fixes older assignments).
+            if ($assignedId !== '') {
+                $syncDoc = $db->collection('admins')->document($assignedId)->snapshot();
+                if ($syncDoc->exists() && !empty($syncDoc->data()['departmentId'])) {
+                    $updateData['departmentId'] = $syncDoc->data()['departmentId'];
+                }
+            }
+        } elseif ($assignedId === '') {
+            $updateData['assignedAdminId']   = null;
+            $updateData['assignedAdminName'] = null;
+        } else {
+            $adminDoc = $db->collection('admins')->document($assignedId)->snapshot();
+
+            if (!$adminDoc->exists() || empty($adminDoc->data()['isActive'])) {
+                $_SESSION['flash'] = [
+                    'type' => 'error',
+                    'msg'  => 'Selected admin does not exist or is inactive.'
+                ];
+                header('Location: reports.php');
+                exit;
+            }
+
+            $adminData = $adminDoc->data();
+            $updateData['assignedAdminId']   = $adminDoc->id();
+            $updateData['assignedAdminName'] = $adminData['fullName'] ?? ($adminData['email'] ?? $adminDoc->id());
+
+            // The report takes the assigned admin's department.
+            if (!empty($adminData['departmentId'])) {
+                $updateData['departmentId'] = $adminData['departmentId'];
+            }
+        }
     }
 
     $db

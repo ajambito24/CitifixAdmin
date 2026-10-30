@@ -3,6 +3,7 @@
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../config/firebase.php';
 require_once __DIR__ . '/../../config/department_map.php';
+require_once __DIR__ . '/../../includes/report_range.php';
 
 /**
  * Safely converts Firebase/Firestore date values into a Manila DateTime object.
@@ -46,10 +47,10 @@ $reports = [];
 $error = '';
 
 try {
-    // 🔒 Department scope: super admin sees all, others see own dept only
+    // 🔒 Scope: super admin sees all, admins see only reports assigned to them
     $query = $db->collection('reports');
     if (!$IS_SUPER_ADMIN) {
-        $query = $query->where('departmentId', '=', $ADMIN_DEPT);
+        $query = $query->where('assignedAdminId', '=', $ADMIN_ID);
     }
 
     $documents = $query->documents();
@@ -105,36 +106,55 @@ try {
             'adminNotes'         => $data['adminNotes']   ?? '',
             'departmentId'       => $data['departmentId'] ?? null,
             'departmentName'     => department_name($db, $data['departmentId'] ?? null),
+            'assignedAdminId'    => $data['assignedAdminId']   ?? '',
+            'assignedAdminName'  => $data['assignedAdminName'] ?? '',
             'createdAtFormatted' => $createdAtFormatted,
+            'createdAtTs'        => $dt !== null ? $dt->getTimestamp() : 0,
             'statusHistory'      => $statusHistory,
         ];
     }
 
     // Sort newest first
     usort($reports, function ($a, $b) {
-        $ta = strtotime($a['createdAtFormatted']) ?: 0;
-        $tb = strtotime($b['createdAtFormatted']) ?: 0;
-        return $tb <=> $ta;
+        return $b['createdAtTs'] <=> $a['createdAtTs'];
     });
 
 } catch (Exception $e) {
     $error = $e->getMessage();
 }
 
-// Counts for filter tabs
-$countAll = count($reports);
-$countPending = 0;
-$countInProgress = 0;
-$countResolved = 0;
+// ---- Period filter (drives the lists and the export) ----
+$allowedRanges = citifix_report_ranges();
+$selectedRange = $_GET['range'] ?? 'all';
+if (!array_key_exists($selectedRange, $allowedRanges)) {
+    $selectedRange = 'all';
+}
 
-foreach ($reports as $r) {
-    $s = strtolower($r['status']);
-    if ($s === 'pending') {
-        $countPending++;
-    } elseif ($s === 'in progress' || $s === 'in_progress') {
-        $countInProgress++;
-    } elseif ($s === 'resolved') {
-        $countResolved++;
+$bounds = citifix_range_bounds($selectedRange);
+if ($bounds['startTs'] !== null) {
+    $reports = array_values(array_filter($reports, function ($r) use ($bounds) {
+        return $r['createdAtTs'] >= $bounds['startTs'] && $r['createdAtTs'] <= $bounds['endTs'];
+    }));
+}
+
+// ---- Active admins for the "Assigned To" dropdown (super admin only) ----
+$adminOptions = [];
+if ($IS_SUPER_ADMIN) {
+    try {
+        foreach ($db->collection('admins')->documents() as $a) {
+            if (!$a->exists()) continue;
+            $ad = $a->data();
+            if (empty($ad['isActive'])) continue;
+            $adminOptions[$a->id()] = [
+                'name' => $ad['fullName'] ?? ($ad['email'] ?? $a->id()),
+                'dept' => department_name($db, $ad['departmentId'] ?? null),
+            ];
+        }
+        uasort($adminOptions, function ($x, $y) {
+            return strcasecmp($x['name'], $y['name']);
+        });
+    } catch (Exception $e) {
+        // dropdown simply stays empty
     }
 }
 
@@ -150,22 +170,162 @@ $statusClasses = [
     'in progress' => 'bg-blue-100 text-blue-800 border-blue-200',
     'in_progress' => 'bg-blue-100 text-blue-800 border-blue-200',
     'resolved'    => 'bg-green-100 text-green-800 border-green-200',
+    'rejected'    => 'bg-red-100 text-red-800 border-red-200',
 ];
 
+// Status filter (default: pending). Filtering happens client-side; this only sets the initial state.
+$statusOptions = [
+    'pending'     => 'Pending',
+    'in progress' => 'In Progress',
+    'resolved'    => 'Resolved',
+    'rejected'    => 'Rejected',
+    'all'         => 'All',
+];
+
+$selectedStatus = strtolower(trim($_GET['status'] ?? 'pending'));
+if ($selectedStatus === 'in_progress') $selectedStatus = 'in progress';
+if (!array_key_exists($selectedStatus, $statusOptions)) {
+    $selectedStatus = 'pending';
+}
+
 $rows = [];
+$statusCounts = ['pending' => 0, 'in progress' => 0, 'resolved' => 0, 'rejected' => 0];
+
 foreach ($reports as $report) {
     $status = strtolower($report['status']);
+    $filter = ($status === 'in_progress') ? 'in progress' : $status;
+    if (!array_key_exists($filter, $statusCounts)) {
+        $filter = 'pending';
+    }
+    $statusCounts[$filter]++;
+
     $rows[] = [
         'report' => $report,
         'pill'   => $statusClasses[$status] ?? 'bg-slate-100 text-slate-700 border-slate-200',
-        'filter' => ($status === 'in_progress') ? 'in progress' : $status,
+        'filter' => $filter,
         'json'   => htmlspecialchars(json_encode($report), ENT_QUOTES, 'UTF-8'),
     ];
 }
 
-$tabBase     = 'filter-tab inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors sm:text-sm';
-$tabActive   = 'bg-brand-700 text-white';
-$tabInactive = 'bg-slate-100 text-slate-600 hover:bg-slate-200';
+$countAll = count($rows);
+$visibleCount = $selectedStatus === 'all' ? $countAll : $statusCounts[$selectedStatus];
+
+$statusTitles = [
+    'pending'     => 'Pending Reports',
+    'in progress' => 'In Progress Reports',
+    'resolved'    => 'Resolved Reports',
+    'rejected'    => 'Rejected Reports',
+    'all'         => 'All Reports',
+];
+
+/**
+ * Renders one set of reports: a table (sm and up) and cards (below sm).
+ */
+function render_report_rows(array $items, string $emptyText = 'No reports.'): void
+{
+    global $db, $IS_SUPER_ADMIN, $selectedStatus;
+
+    if (empty($items)) {
+        echo '<div class="border-t border-slate-100 py-10 text-center text-sm text-slate-500">' . htmlspecialchars($emptyText) . '</div>';
+        return;
+    }
+    ?>
+    <!-- TABLE (sm and up) -->
+    <div class="hidden overflow-x-auto border-t border-slate-100 sm:block">
+        <table class="w-full min-w-[40rem] text-left text-sm">
+            <thead>
+                <tr class="bg-slate-50 text-xs font-semibold text-slate-500">
+                    <th class="px-4 py-3 sm:px-6">ID</th>
+                    <th class="px-4 py-3">Issue</th>
+                    <th class="px-4 py-3">Department</th>
+                    <?php if ($IS_SUPER_ADMIN): ?>
+                        <th class="px-4 py-3">Assigned To</th>
+                    <?php endif; ?>
+                    <th class="px-4 py-3">Reporter</th>
+                    <th class="px-4 py-3">
+                        <button type="button" onclick="toggleDateSort()" class="date-sort-btn inline-flex items-center gap-1 font-semibold text-slate-500 transition-colors hover:text-slate-800" title="Sort by date">
+                            Date
+                            <svg class="date-sort-icon h-3.5 w-3.5 transition-transform" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m0 0l-5-5m5 5l5-5"/></svg>
+                            <span class="sr-only date-sort-label">Newest first</span>
+                        </button>
+                    </th>
+                    <th class="px-4 py-3">Status</th>
+                    <th class="px-4 py-3 text-right sm:px-6">Action</th>
+                </tr>
+            </thead>
+            <tbody data-sort-list class="divide-y divide-slate-100">
+            <?php foreach ($items as $row): $report = $row['report']; ?>
+                <tr data-id="<?= htmlspecialchars($report['id']) ?>" data-ts="<?= (int) $report['createdAtTs'] ?>" data-status="<?= htmlspecialchars($row['filter']) ?>" class="report-row transition-colors hover:bg-slate-50"<?= ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus) ? ' style="display:none"' : '' ?>>
+                    <td class="px-4 py-3.5 font-mono text-xs text-slate-500 sm:px-6"><?= htmlspecialchars(substr($report['id'], 0, 8)) ?></td>
+                    <td class="px-4 py-3.5"><strong class="text-slate-800"><?= htmlspecialchars($report['category']) ?></strong></td>
+                    <td class="px-4 py-3.5 text-xs text-slate-600"><?= htmlspecialchars(department_name($db, $report['departmentId'] ?? null)) ?></td>
+                    <?php if ($IS_SUPER_ADMIN): ?>
+                        <td class="px-4 py-3.5 text-xs text-slate-600">
+                            <?php if ($report['assignedAdminName'] !== ''): ?>
+                                <?= htmlspecialchars($report['assignedAdminName']) ?>
+                            <?php else: ?>
+                                <span class="text-slate-400">Unassigned</span>
+                            <?php endif; ?>
+                        </td>
+                    <?php endif; ?>
+                    <td class="px-4 py-3.5 text-slate-700"><?= htmlspecialchars($report['userFullName']) ?></td>
+                    <td class="whitespace-nowrap px-4 py-3.5 text-xs text-slate-500"><?= htmlspecialchars($report['createdAtFormatted']) ?></td>
+                    <td class="px-4 py-3.5">
+                        <span class="inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize <?= $row['pill'] ?>">
+                            <?= htmlspecialchars($report['status']) ?>
+                        </span>
+                    </td>
+                    <td class="px-4 py-3.5 text-right sm:px-6">
+                        <?php if (can_edit_reports()): ?>
+                            <button type="button" onclick='openReportModal(<?= $row['json'] ?>)' class="inline-flex items-center rounded-lg bg-brand-700 px-3.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-brand-800">Edit</button>
+                        <?php else: ?>
+                            <button type="button" onclick='openReportModal(<?= $row['json'] ?>)' class="inline-flex items-center rounded-lg bg-slate-100 px-3.5 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200">View</button>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- CARDS (below sm) -->
+    <div data-sort-list class="divide-y divide-slate-100 border-t border-slate-100 sm:hidden">
+        <?php foreach ($items as $row): $report = $row['report']; ?>
+            <div data-id="<?= htmlspecialchars($report['id']) ?>" data-ts="<?= (int) $report['createdAtTs'] ?>" data-status="<?= htmlspecialchars($row['filter']) ?>" class="report-row p-4"<?= ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus) ? ' style="display:none"' : '' ?>>
+                <div class="flex items-start justify-between gap-3">
+                    <strong class="min-w-0 truncate text-slate-900"><?= htmlspecialchars($report['category']) ?></strong>
+                    <span class="inline-block shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize <?= $row['pill'] ?>">
+                        <?= htmlspecialchars($report['status']) ?>
+                    </span>
+                </div>
+                <p class="mt-1 text-xs text-slate-600">
+                    <?= htmlspecialchars(department_name($db, $report['departmentId'] ?? null)) ?>
+                    &middot; <?= htmlspecialchars($report['userFullName']) ?>
+                </p>
+                <?php if ($IS_SUPER_ADMIN): ?>
+                    <p class="mt-1 text-xs text-slate-600">
+                        Assigned to:
+                        <?php if ($report['assignedAdminName'] !== ''): ?>
+                            <strong><?= htmlspecialchars($report['assignedAdminName']) ?></strong>
+                        <?php else: ?>
+                            <span class="text-slate-400">Unassigned</span>
+                        <?php endif; ?>
+                    </p>
+                <?php endif; ?>
+                <p class="mt-1 text-xs text-slate-500">
+                    <?= htmlspecialchars($report['createdAtFormatted']) ?>
+                    &middot; <span class="font-mono"><?= htmlspecialchars(substr($report['id'], 0, 8)) ?></span>
+                </p>
+                <?php if (can_edit_reports()): ?>
+                    <button type="button" onclick='openReportModal(<?= $row['json'] ?>)' class="mt-3 w-full rounded-lg bg-brand-700 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-800">Edit</button>
+                <?php else: ?>
+                    <button type="button" onclick='openReportModal(<?= $row['json'] ?>)' class="mt-3 w-full rounded-lg bg-slate-100 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-200">View</button>
+                <?php endif; ?>
+            </div>
+        <?php endforeach; ?>
+    </div>
+    <?php
+}
 
 ?>
 <!DOCTYPE html>
@@ -179,6 +339,7 @@ $tabInactive = 'bg-slate-100 text-slate-600 hover:bg-slate-200';
 .timeline-entry::before { content: ""; position: absolute; left: 8px; top: 16px; bottom: -2px; width: 2px; background: #e2e8f0; }
 .timeline-entry:last-child::before { display: none; }
 .timeline-dot { position: absolute; left: 0; top: 4px; width: 18px; height: 18px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 1px #cbd5e1; }
+
 </style>
 </head>
 
@@ -249,106 +410,72 @@ $tabInactive = 'bg-slate-100 text-slate-600 hover:bg-slate-200';
             </div>
         <?php endif; ?>
 
+        <!-- PENDING REPORTS (main list) -->
         <section class="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div class="flex items-center justify-between gap-3 p-4 sm:p-6">
+            <div class="flex flex-wrap items-center justify-between gap-3 p-4 sm:p-6">
                 <div>
-                    <h2 class="text-lg font-bold text-slate-900 sm:text-xl">All Reports</h2>
-                    <p class="text-xs text-slate-500 sm:text-sm">Reports submitted by CitiFix residents</p>
+                    <h2 id="status-title" class="text-lg font-bold text-slate-900 sm:text-xl"><?= htmlspecialchars($statusTitles[$selectedStatus]) ?></h2>
+                    <p class="text-xs text-slate-500 sm:text-sm">
+                        <?= $IS_SUPER_ADMIN ? 'Reports submitted by CitiFix residents' : 'Reports assigned to you' ?>
+                    </p>
                 </div>
-                <div class="flex shrink-0 items-center gap-2 rounded-full bg-brand-50 px-3 py-1.5 text-sm text-brand-700">
-                    <span class="inline-block h-2 w-2 rounded-full bg-brand-500"></span>
-                    <strong><?= $countAll ?></strong>
-                    <span>report<?= $countAll === 1 ? '' : 's' ?></span>
+                <div class="flex flex-wrap items-center gap-2">
+                    <select id="status-select" aria-label="Report status" onchange="applyStatusFilter(this.value)" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100">
+                        <?php foreach ($statusOptions as $sk => $sl): ?>
+                            <?php $n = $sk === 'all' ? $countAll : $statusCounts[$sk]; ?>
+                            <option value="<?= htmlspecialchars($sk) ?>" <?= $selectedStatus === $sk ? 'selected' : '' ?>><?= htmlspecialchars($sl) ?> (<?= $n ?>)</option>
+                        <?php endforeach; ?>
+                    </select>
+
+                    <select id="period-select" aria-label="Report period" onchange="window.location.href = '?range=' + encodeURIComponent(this.value) + '&status=' + encodeURIComponent(document.getElementById('status-select').value)" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100">
+                        <?php foreach ($allowedRanges as $rk => $rl): ?>
+                            <option value="<?= htmlspecialchars($rk) ?>" <?= $selectedRange === $rk ? 'selected' : '' ?>><?= htmlspecialchars($rl) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+
+                    <div class="relative" id="export-dd">
+                        <button type="button" id="export-btn" aria-haspopup="menu" class="inline-flex items-center gap-1.5 rounded-lg bg-brand-700 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-800">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
+                            Export
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div id="export-menu" role="menu" class="absolute right-0 z-30 mt-1 hidden w-48 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                            <a id="export-docx" role="menuitem" href="export_reports.php?range=<?= urlencode($selectedRange) ?>&amp;format=docx&amp;status=all" class="flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                                <span class="inline-flex h-6 w-6 items-center justify-center rounded bg-blue-100 text-[10px] font-bold text-blue-700">W</span>
+                                Word (.docx)
+                            </a>
+                            <a id="export-pdf" role="menuitem" href="export_reports.php?range=<?= urlencode($selectedRange) ?>&amp;format=pdf&amp;status=all" class="flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                                <span class="inline-flex h-6 w-6 items-center justify-center rounded bg-red-100 text-[10px] font-bold text-red-700">PDF</span>
+                                PDF (.pdf)
+                            </a>
+                        </div>
+                    </div>
+
+                    <div class="flex shrink-0 items-center gap-2 rounded-full bg-brand-50 px-3 py-1.5 text-sm text-brand-700">
+                        <span class="inline-block h-2 w-2 rounded-full bg-brand-500"></span>
+                        <strong id="visible-count"><?= $visibleCount ?></strong>
+                        <span id="visible-label"><?= $visibleCount === 1 ? 'report' : 'reports' ?></span>
+                    </div>
                 </div>
             </div>
 
-            <?php if (empty($reports)): ?>
-                <div class="border-t border-slate-100 py-14 text-center">
-                    <div class="text-4xl">📋</div>
-                    <p class="mt-2 text-sm text-slate-500">No reports available.</p>
-                </div>
-            <?php else: ?>
+            <!-- Mobile date sort -->
+            <div class="flex justify-end border-t border-slate-100 px-4 py-2.5 sm:hidden">
+                <button type="button" onclick="toggleDateSort()" class="date-sort-btn inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-200">
+                    <svg class="date-sort-icon h-3.5 w-3.5 transition-transform" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m0 0l-5-5m5 5l5-5"/></svg>
+                    <span class="date-sort-label">Newest first</span>
+                </button>
+            </div>
 
-                <div class="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-4 sm:px-6" id="filter-tabs">
-                    <button type="button" data-filter="all" class="<?= $tabBase ?> <?= $tabActive ?>">All (<?= $countAll ?>)</button>
-                    <button type="button" data-filter="pending" class="<?= $tabBase ?> <?= $tabInactive ?>"><span class="h-2 w-2 rounded-full bg-amber-500"></span>Pending (<?= $countPending ?>)</button>
-                    <button type="button" data-filter="in progress" class="<?= $tabBase ?> <?= $tabInactive ?>"><span class="h-2 w-2 rounded-full bg-blue-500"></span>In Progress (<?= $countInProgress ?>)</button>
-                    <button type="button" data-filter="resolved" class="<?= $tabBase ?> <?= $tabInactive ?>"><span class="h-2 w-2 rounded-full bg-green-500"></span>Resolved (<?= $countResolved ?>)</button>
-                </div>
-
-                <!-- TABLE (sm and up) -->
-                <div class="hidden overflow-x-auto border-t border-slate-100 sm:block">
-                    <table class="w-full min-w-[40rem] text-left text-sm">
-                        <thead>
-                            <tr class="bg-slate-50 text-xs font-semibold text-slate-500">
-                                <th class="px-4 py-3 sm:px-6">ID</th>
-                                <th class="px-4 py-3">Issue</th>
-                                <th class="px-4 py-3">Department</th>
-                                <th class="px-4 py-3">Reporter</th>
-                                <th class="px-4 py-3">Date</th>
-                                <th class="px-4 py-3">Status</th>
-                                <th class="px-4 py-3 text-right sm:px-6">Action</th>
-                            </tr>
-                        </thead>
-                        <tbody id="reports-tbody" class="divide-y divide-slate-100">
-                        <?php foreach ($rows as $row): $report = $row['report']; ?>
-                            <tr data-id="<?= htmlspecialchars($report['id']) ?>" data-status="<?= htmlspecialchars($row['filter']) ?>" class="report-row transition-colors hover:bg-slate-50">
-                                <td class="px-4 py-3.5 font-mono text-xs text-slate-500 sm:px-6"><?= htmlspecialchars(substr($report['id'], 0, 8)) ?></td>
-                                <td class="px-4 py-3.5"><strong class="text-slate-800"><?= htmlspecialchars($report['category']) ?></strong></td>
-                                <td class="px-4 py-3.5 text-xs text-slate-600"><?= htmlspecialchars(department_name($db, $report['departmentId'] ?? null)) ?></td>
-                                <td class="px-4 py-3.5 text-slate-700"><?= htmlspecialchars($report['userFullName']) ?></td>
-                                <td class="whitespace-nowrap px-4 py-3.5 text-xs text-slate-500"><?= htmlspecialchars($report['createdAtFormatted']) ?></td>
-                                <td class="px-4 py-3.5">
-                                    <span class="inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize <?= $row['pill'] ?>">
-                                        <?= htmlspecialchars($report['status']) ?>
-                                    </span>
-                                </td>
-                                <td class="px-4 py-3.5 text-right sm:px-6">
-                                    <?php if (can_edit_reports()): ?>
-                                        <button type="button" onclick='openReportModal(<?= $row['json'] ?>)' class="inline-flex items-center rounded-lg bg-brand-700 px-3.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-brand-800">Edit</button>
-                                    <?php else: ?>
-                                        <button type="button" onclick='openReportModal(<?= $row['json'] ?>)' class="inline-flex items-center rounded-lg bg-slate-100 px-3.5 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200">View</button>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-
-                <!-- CARDS (below sm) -->
-                <div class="divide-y divide-slate-100 border-t border-slate-100 sm:hidden">
-                    <?php foreach ($rows as $row): $report = $row['report']; ?>
-                        <div data-id="<?= htmlspecialchars($report['id']) ?>" data-status="<?= htmlspecialchars($row['filter']) ?>" class="report-row p-4">
-                            <div class="flex items-start justify-between gap-3">
-                                <strong class="min-w-0 truncate text-slate-900"><?= htmlspecialchars($report['category']) ?></strong>
-                                <span class="inline-block shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize <?= $row['pill'] ?>">
-                                    <?= htmlspecialchars($report['status']) ?>
-                                </span>
-                            </div>
-                            <p class="mt-1 text-xs text-slate-600">
-                                <?= htmlspecialchars(department_name($db, $report['departmentId'] ?? null)) ?>
-                                &middot; <?= htmlspecialchars($report['userFullName']) ?>
-                            </p>
-                            <p class="mt-1 text-xs text-slate-500">
-                                <?= htmlspecialchars($report['createdAtFormatted']) ?>
-                                &middot; <span class="font-mono"><?= htmlspecialchars(substr($report['id'], 0, 8)) ?></span>
-                            </p>
-                            <?php if (can_edit_reports()): ?>
-                                <button type="button" onclick='openReportModal(<?= $row['json'] ?>)' class="mt-3 w-full rounded-lg bg-brand-700 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-800">Edit</button>
-                            <?php else: ?>
-                                <button type="button" onclick='openReportModal(<?= $row['json'] ?>)' class="mt-3 w-full rounded-lg bg-slate-100 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-200">View</button>
-                            <?php endif; ?>
-                        </div>
-                    <?php endforeach; ?>
-                </div>
-
-                <div id="no-results" class="hidden border-t border-slate-100 py-14 text-center">
-                    <div class="text-4xl">🔍</div>
-                    <p class="mt-2 text-sm text-slate-500">No reports match this filter.</p>
-                </div>
-            <?php endif; ?>
+            <div id="reports-list">
+                <?php render_report_rows($rows, $selectedRange === 'all' ? 'No reports available.' : 'No reports for this period.'); ?>
+            </div>
+            <div id="no-results" class="<?= ($visibleCount === 0 && !empty($rows)) ? '' : 'hidden ' ?>border-t border-slate-100 py-14 text-center">
+                <div class="text-4xl">🔍</div>
+                <p class="mt-2 text-sm text-slate-500">No reports with this status.</p>
+            </div>
         </section>
+
     </main>
 </div>
 
@@ -397,12 +524,43 @@ $tabInactive = 'bg-slate-100 text-slate-600 hover:bg-slate-200';
                     <label class="mb-1 block text-xs font-semibold text-slate-500">Location</label>
                     <div id="modal-coords" class="font-mono text-xs text-slate-700"></div>
                 </div>
+                <?php if ($IS_SUPER_ADMIN): ?>
+                <div class="mt-4">
+                    <label class="mb-1 block text-xs font-semibold text-slate-500">Assigned To</label>
+                    <div class="relative" id="assign-dd">
+                        <input type="hidden" name="assigned_admin_id" id="modal-assigned" value="">
+                        <button type="button" id="assign-btn" aria-haspopup="listbox" class="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-left outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100">
+                            <span id="assign-label" class="min-w-0 flex-1"></span>
+                            <svg class="h-4 w-4 shrink-0 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <ul id="assign-list" role="listbox" class="absolute z-20 mt-1 hidden max-h-56 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                            <li>
+                                <button type="button" class="assign-opt block w-full px-3 py-2 text-left hover:bg-slate-50" data-value="" data-name="" data-dept="">
+                                    <span class="block text-sm text-slate-500">— Unassigned —</span>
+                                </button>
+                            </li>
+                            <?php foreach ($adminOptions as $aid => $opt): ?>
+                                <li>
+                                    <button type="button" class="assign-opt block w-full px-3 py-2 text-left hover:bg-slate-50"
+                                            data-value="<?= htmlspecialchars($aid) ?>"
+                                            data-name="<?= htmlspecialchars($opt['name']) ?>"
+                                            data-dept="<?= htmlspecialchars($opt['dept']) ?>">
+                                        <span class="block text-sm font-medium text-slate-800"><?= htmlspecialchars($opt['name']) ?></span>
+                                        <span class="block text-[11px] text-slate-500"><?= htmlspecialchars($opt['dept']) ?></span>
+                                    </button>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
+                </div>
+                <?php endif; ?>
                 <div class="mt-4">
                     <label class="mb-1 block text-xs font-semibold text-slate-500">Status</label>
                     <select id="modal-status" onchange="document.getElementById('modal-status-hidden').value = this.value" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100">
                         <option value="pending">Pending</option>
                         <option value="in progress">In Progress</option>
                         <option value="resolved">Resolved</option>
+                        <option value="rejected">Rejected</option>
                     </select>
                 </div>
                 <div class="mt-4">
@@ -428,7 +586,8 @@ $tabInactive = 'bg-slate-100 text-slate-600 hover:bg-slate-200';
 const STATUS_META = {
     "pending":     { color: "#f59e0b", label: "Pending" },
     "in progress": { color: "#3b82f6", label: "In Progress" },
-    "resolved":    { color: "#22c55e", label: "Resolved" }
+    "resolved":    { color: "#22c55e", label: "Resolved" },
+    "rejected":    { color: "#ef4444", label: "Rejected" }
 };
 
 function getStatusMeta(status) {
@@ -452,9 +611,12 @@ function openReportModal(report) {
     document.getElementById("modal-coords").textContent = coords;
 
     const statusSelect = document.getElementById("modal-status");
-    statusSelect.value = (report.status || "pending").toLowerCase();
+    statusSelect.value = (report.status || "pending").toLowerCase().replace("_", " ");
     document.getElementById("modal-status-hidden").value = statusSelect.value;
     document.getElementById("modal-notes").value = report.adminNotes || "";
+
+    // Only rendered for the super admin
+    setAssigned(report.assignedAdminId || "", report.assignedAdminName || "");
 
     const imgWrap = document.getElementById("modal-image-wrap");
     const img = document.getElementById("modal-image");
@@ -496,7 +658,75 @@ function openReportModal(report) {
     document.body.style.overflow = "hidden";
 }
 
+// ---- "Assigned To" custom dropdown (super admin only) ----
+function renderAssignLabel(name, dept) {
+    const label = document.getElementById("assign-label");
+    if (!label) return;
+    label.innerHTML = "";
+
+    const n = document.createElement("span");
+    n.className = "block truncate text-sm " + (name ? "font-medium text-slate-800" : "text-slate-500");
+    n.textContent = name || "— Unassigned —";
+    label.appendChild(n);
+
+    if (dept) {
+        const d = document.createElement("span");
+        d.className = "block truncate text-[11px] text-slate-500";
+        d.textContent = dept;
+        label.appendChild(d);
+    }
+}
+
+function setAssigned(id, fallbackName) {
+    const hidden = document.getElementById("modal-assigned");
+    if (!hidden) return;
+
+    hidden.value = id;
+    closeAssignList();
+
+    if (id === "") {
+        renderAssignLabel("", "");
+        return;
+    }
+
+    const opt = document.querySelector('.assign-opt[data-value="' + CSS.escape(id) + '"]');
+    if (opt) {
+        renderAssignLabel(opt.dataset.name, opt.dataset.dept);
+    } else {
+        // Admin was deactivated/removed: keep the current assignment untouched.
+        renderAssignLabel((fallbackName || "Unknown admin") + " (inactive)", "");
+    }
+}
+
+function closeAssignList() {
+    const list = document.getElementById("assign-list");
+    if (list) list.classList.add("hidden");
+}
+
+(function () {
+    const btn = document.getElementById("assign-btn");
+    const list = document.getElementById("assign-list");
+    if (!btn || !list) return;
+
+    btn.addEventListener("click", function () {
+        list.classList.toggle("hidden");
+    });
+
+    list.querySelectorAll(".assign-opt").forEach(function (opt) {
+        opt.addEventListener("click", function () {
+            document.getElementById("modal-assigned").value = opt.dataset.value;
+            renderAssignLabel(opt.dataset.name, opt.dataset.dept);
+            closeAssignList();
+        });
+    });
+
+    document.addEventListener("click", function (e) {
+        if (!document.getElementById("assign-dd").contains(e.target)) closeAssignList();
+    });
+})();
+
 function closeReportModal() {
+    closeAssignList();
     const modal = document.getElementById("report-modal");
     modal.classList.add("hidden");
     modal.classList.remove("flex");
@@ -507,52 +737,125 @@ document.addEventListener("keydown", function(event) {
     if (event.key === "Escape") closeReportModal();
 });
 
-const filterTabs = document.querySelectorAll(".filter-tab");
-const reportRows = document.querySelectorAll(".report-row");
-const noResults = document.getElementById("no-results");
+// ---- Status filter (client-side) + export links ----
+const EXPORT_RANGE = <?= json_encode($selectedRange) ?>;
+const STATUS_TITLES = <?= json_encode($statusTitles) ?>;
 
-const TAB_ACTIVE = ["bg-brand-700", "text-white"];
-const TAB_INACTIVE = ["bg-slate-100", "text-slate-600", "hover:bg-slate-200"];
+function updateExportLinks() {
+    const statusSel = document.getElementById("status-select");
+    const status = statusSel ? statusSel.value : "all";
 
-filterTabs.forEach(function(tab) {
-    tab.addEventListener("click", function() {
-        const filter = tab.getAttribute("data-filter");
-        filterTabs.forEach(function(t) {
-            t.classList.remove.apply(t.classList, TAB_ACTIVE);
-            t.classList.add.apply(t.classList, TAB_INACTIVE);
-        });
-        tab.classList.remove.apply(tab.classList, TAB_INACTIVE);
-        tab.classList.add.apply(tab.classList, TAB_ACTIVE);
-
-        let visibleCount = 0;
-        reportRows.forEach(function(row) {
-            const status = row.getAttribute("data-status");
-            if (filter === "all" || status === filter) {
-                row.style.display = "";
-                visibleCount++;
-            } else {
-                row.style.display = "none";
-            }
-        });
-        if (visibleCount === 0) {
-            noResults.classList.remove("hidden");
-        } else {
-            noResults.classList.add("hidden");
-        }
+    ["docx", "pdf"].forEach(function (fmt) {
+        const a = document.getElementById("export-" + fmt);
+        if (!a) return;
+        a.href = "export_reports.php?range=" + encodeURIComponent(EXPORT_RANGE) +
+                 "&format=" + fmt +
+                 "&status=" + encodeURIComponent(status);
     });
-});
+}
+
+function applyStatusFilter(value) {
+    const sel = document.getElementById("status-select");
+    if (sel && sel.value !== value) sel.value = value;
+
+    document.querySelectorAll(".report-row").forEach(function (row) {
+        const show = value === "all" || row.dataset.status === value;
+        row.style.display = show ? "" : "none";
+    });
+
+    // Count from the table rows only (cards duplicate them on mobile).
+    const visible = document.querySelectorAll("tbody .report-row").length
+        ? Array.from(document.querySelectorAll("tbody .report-row")).filter(function (r) { return r.style.display !== "none"; }).length
+        : Array.from(document.querySelectorAll(".report-row")).filter(function (r) { return r.style.display !== "none"; }).length;
+
+    const count = document.getElementById("visible-count");
+    const label = document.getElementById("visible-label");
+    const title = document.getElementById("status-title");
+    const list = document.getElementById("reports-list");
+    const none = document.getElementById("no-results");
+
+    if (count) count.textContent = visible;
+    if (label) label.textContent = visible === 1 ? "report" : "reports";
+    if (title) title.textContent = STATUS_TITLES[value] || "Reports";
+    if (list && none && document.querySelector(".report-row")) {
+        none.classList.toggle("hidden", visible !== 0);
+    }
+
+    updateExportLinks();
+
+    // Keep the status in the URL so a refresh / period change keeps it.
+    const params = new URLSearchParams(window.location.search);
+    params.set("status", value);
+    window.history.replaceState(null, "", window.location.pathname + "?" + params.toString());
+}
+
+(function () {
+    const btn = document.getElementById("export-btn");
+    const menu = document.getElementById("export-menu");
+    if (!btn || !menu) return;
+
+    btn.addEventListener("click", function () { menu.classList.toggle("hidden"); });
+    menu.addEventListener("click", function (e) {
+        if (e.target.closest("a")) menu.classList.add("hidden");
+    });
+    document.addEventListener("click", function (e) {
+        if (!document.getElementById("export-dd").contains(e.target)) menu.classList.add("hidden");
+    });
+})();
+
+updateExportLinks();
+
+// ---- Date sort (newest first / oldest first) — applies to every list ----
+let dateSortDir = "desc";
+
+function applyDateSort(dir) {
+    dateSortDir = dir;
+
+    document.querySelectorAll("[data-sort-list]").forEach(function (container) {
+        const items = Array.from(container.querySelectorAll(":scope > .report-row"));
+        items.sort(function (a, b) {
+            const ta = Number(a.dataset.ts) || 0;
+            const tb = Number(b.dataset.ts) || 0;
+            return dir === "desc" ? tb - ta : ta - tb;
+        });
+        items.forEach(function (el) { container.appendChild(el); });
+    });
+
+    const text = dir === "desc" ? "Newest first" : "Oldest first";
+    document.querySelectorAll(".date-sort-label").forEach(function (el) { el.textContent = text; });
+    document.querySelectorAll(".date-sort-icon").forEach(function (el) {
+        el.style.transform = dir === "desc" ? "" : "rotate(180deg)";
+    });
+    document.querySelectorAll(".date-sort-btn").forEach(function (b) {
+        b.title = "Sorted: " + text + " (click to reverse)";
+    });
+}
+
+function toggleDateSort() {
+    applyDateSort(dateSortDir === "desc" ? "asc" : "desc");
+}
 
 // Opened from the notification bell: reports.php?open=<report id>
 (function () {
     const openId = new URLSearchParams(window.location.search).get("open");
     if (!openId) return;
 
-    const btn = document.querySelector('.report-row[data-id="' + CSS.escape(openId) + '"] button');
+    const row = document.querySelector('.report-row[data-id="' + CSS.escape(openId) + '"]');
+    const btn = row ? row.querySelector("button") : null;
     if (btn) {
+        // Make sure the report's status is visible in the filter.
+        const sel = document.getElementById("status-select");
+        if (sel && sel.value !== "all" && sel.value !== row.dataset.status) {
+            applyStatusFilter(row.dataset.status);
+        }
         btn.click();
     }
-    // Drop ?open= so a refresh doesn't reopen the modal.
-    window.history.replaceState(null, "", window.location.pathname);
+    // Drop ?open= so a refresh doesn't reopen the modal (keep ?range=).
+    const params = new URLSearchParams(window.location.search);
+    params.delete("open");
+    params.set("status", document.getElementById("status-select").value);
+    const qs = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (qs ? "?" + qs : ""));
 })();
 </script>
 </body>

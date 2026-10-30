@@ -4,10 +4,7 @@ require_once __DIR__ . '/../../config/firebase.php';
 require_once __DIR__ . '/../../config/department_map.php';
 
 // 🔒 Super admin only
-if (!$IS_SUPER_ADMIN) {
-    http_response_code(403);
-    die('Only super administrators can manage personnel.');
-}
+require_super_admin();
 
 $personnel = [];
 $error = '';
@@ -19,23 +16,16 @@ $formError = '';
 $person = [
     'fullName'     => '',
     'email'        => '',
-    'role'         => 'staff',
     'departmentId' => '',
     'isActive'     => true,
 ];
 
 // ---- List ----
 try {
-    // Pull all users whose role is staff/admin/super_admin
-    foreach ($db->collection('users')->documents() as $doc) {
+    foreach ($db->collection('admins')->documents() as $doc) {
         if (!$doc->exists()) continue;
 
         $data = $doc->data();
-        $role = strtolower($data['role'] ?? 'resident');
-
-        // Skip residents
-        if ($role === 'resident') continue;
-
         $data['_id'] = $doc->id();
         $personnel[] = $data;
     }
@@ -51,7 +41,7 @@ try {
 // ---- Load existing (edit) ----
 if ($isEdit && $_SERVER['REQUEST_METHOD'] !== 'POST') {
     try {
-        $doc = $db->collection('users')->document($id)->snapshot();
+        $doc = $db->collection('admins')->document($id)->snapshot();
         if ($doc->exists()) {
             $person = array_merge($person, $doc->data());
         } else {
@@ -70,37 +60,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $fullName   = trim($_POST['fullName'] ?? '');
     $email      = trim($_POST['email'] ?? '');
     $password   = $_POST['password'] ?? '';
-    $role       = strtolower(trim($_POST['role'] ?? 'staff'));
     $department = trim($_POST['departmentId'] ?? '');
     $isActive   = !empty($_POST['isActive']);
-
-    $allowedRoles = ['staff', 'admin', 'super_admin'];
 
     // Validation
     if ($fullName === '' || $email === '') {
         $formError = 'Name and email are required.';
     } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $formError = 'Please enter a valid email address.';
-    } elseif (!in_array($role, $allowedRoles, true)) {
-        $formError = 'Invalid role selected.';
-    } elseif ($role !== 'super_admin' && $department === '') {
-        $formError = 'Please choose a department for this account.';
+    } elseif ($department === '') {
+        $formError = 'Please choose a department for this admin.';
     } elseif (!$isEdit && $password === '') {
         $formError = 'Password is required for new personnel.';
-    } elseif ($isEdit && $id === $ADMIN_ID && $role !== 'super_admin') {
-        $formError = 'You cannot demote your own account.';
-    } elseif ($isEdit && $id === $ADMIN_ID && !$isActive) {
-        $formError = 'You cannot deactivate your own account.';
     }
 
-    // Check duplicate email
+    // Check duplicate email (admins + super_admins share the same login page)
     if ($formError === '') {
         try {
-            $dup = $db->collection('users')->where('email', '=', $email)->documents();
-            foreach ($dup as $d) {
-                if ($d->exists() && $d->id() !== $id) {
-                    $formError = 'Email is already used by another account.';
-                    break;
+            foreach (['admins', 'super_admins'] as $col) {
+                $dup = $db->collection($col)->where('email', '=', $email)->documents();
+                foreach ($dup as $d) {
+                    $isSelf = ($col === 'admins' && $d->id() === $id);
+                    if ($d->exists() && !$isSelf) {
+                        $formError = 'Email is already used by another account.';
+                        break 2;
+                    }
                 }
             }
         } catch (Exception $e) {
@@ -114,22 +98,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $data = [
                 'fullName'     => $fullName,
                 'email'        => $email,
-                'role'         => $role,
-                'departmentId' => $role === 'super_admin' ? null : $department,
+                'departmentId' => $department,
                 'isActive'     => $isActive,
                 'updatedAt'    => new \Google\Cloud\Core\Timestamp(new \DateTime()),
             ];
 
             if ($password !== '') {
-                $data['password'] = $password;   // TODO: password_hash later
+                $data['password'] = password_hash($password, PASSWORD_DEFAULT);
             }
 
             if ($isEdit) {
-                $db->collection('users')->document($id)->set($data, ['merge' => true]);
+                $db->collection('admins')->document($id)->set($data, ['merge' => true]);
             } else {
                 $data['createdAt'] = new \Google\Cloud\Core\Timestamp(new \DateTime());
                 $data['createdBy'] = $ADMIN_EMAIL;
-                $db->collection('users')->add($data);
+                $db->collection('admins')->add($data);
             }
 
             $_SESSION['flash'] = [
@@ -156,12 +139,6 @@ $activePage = 'personnel';
 
 // The add/edit dialog opens server-side: ?add=1, ?id=..., or a failed POST.
 $modalOpen = $_SERVER['REQUEST_METHOD'] === 'POST' || $id !== '' || isset($_GET['add']);
-
-$roleBadgeMap = [
-    'super_admin' => 'bg-purple-100 text-purple-800 border-purple-200',
-    'admin'       => 'bg-blue-100 text-blue-800 border-blue-200',
-    'staff'       => 'bg-slate-100 text-slate-700 border-slate-200',
-];
 
 $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100';
 
@@ -190,7 +167,7 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
                 </button>
                 <div class="min-w-0">
                     <h1 class="truncate text-lg font-extrabold tracking-tight text-slate-900 sm:text-xl">Personnel</h1>
-                    <p class="truncate text-xs text-slate-500 sm:text-sm">Admin and staff accounts</p>
+                    <p class="truncate text-xs text-slate-500 sm:text-sm">Admin accounts</p>
                 </div>
             </div>
 
@@ -243,7 +220,7 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
                 <div class="border-t border-slate-100 py-14 text-center">
                     <div class="text-4xl">👥</div>
                     <p class="mt-2 text-sm text-slate-500">No personnel records yet.</p>
-                    <p class="text-xs text-slate-400">Click "+ Add Personnel" to create the first admin or staff account.</p>
+                    <p class="text-xs text-slate-400">Click "+ Add Personnel" to create the first admin account.</p>
                 </div>
             <?php else: ?>
 
@@ -254,7 +231,6 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
                             <tr class="bg-slate-50 text-xs font-semibold text-slate-500">
                                 <th class="px-4 py-3 sm:px-6">Name</th>
                                 <th class="px-4 py-3">Email</th>
-                                <th class="px-4 py-3">Role</th>
                                 <th class="px-4 py-3">Department</th>
                                 <th class="px-4 py-3">Status</th>
                                 <th class="px-4 py-3 text-right sm:px-6">Actions</th>
@@ -262,26 +238,13 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
                         </thead>
                         <tbody class="divide-y divide-slate-100">
                         <?php foreach ($personnel as $p):
-                            $role   = strtolower($p['role'] ?? 'staff');
                             $active = $p['isActive'] ?? true;
                             $deptId = $p['departmentId'] ?? null;
-                            $badge  = $roleBadgeMap[$role] ?? $roleBadgeMap['staff'];
                         ?>
                             <tr class="transition-colors hover:bg-slate-50">
                                 <td class="px-4 py-3.5 font-semibold text-slate-800 sm:px-6"><?= htmlspecialchars($p['fullName'] ?? 'Unknown') ?></td>
                                 <td class="px-4 py-3.5 text-slate-600"><?= htmlspecialchars($p['email'] ?? '') ?></td>
-                                <td class="px-4 py-3.5">
-                                    <span class="inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold <?= $badge ?>">
-                                        <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $role))) ?>
-                                    </span>
-                                </td>
-                                <td class="px-4 py-3.5 text-xs text-slate-600">
-                                    <?php if ($role === 'super_admin'): ?>
-                                        <em>All departments</em>
-                                    <?php else: ?>
-                                        <?= htmlspecialchars(department_name($db, $deptId)) ?>
-                                    <?php endif; ?>
-                                </td>
+                                <td class="px-4 py-3.5 text-xs text-slate-600"><?= htmlspecialchars(department_name($db, $deptId)) ?></td>
                                 <td class="px-4 py-3.5">
                                     <?php if ($active): ?>
                                         <span class="inline-block rounded-full border border-green-200 bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-800">Active</span>
@@ -291,11 +254,9 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
                                 </td>
                                 <td class="whitespace-nowrap px-4 py-3.5 text-right sm:px-6">
                                     <a href="personnel.php?id=<?= urlencode($p['_id']) ?>" class="inline-flex items-center rounded-lg bg-brand-700 px-3.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-brand-800">Edit</a>
-                                    <?php if ($p['_id'] !== $ADMIN_ID): ?>
-                                        <a href="personnel_delete.php?id=<?= urlencode($p['_id']) ?>"
-                                           onclick="return confirm('Delete this personnel? This cannot be undone.');"
-                                           class="ml-1 inline-flex items-center rounded-lg bg-red-50 px-3.5 py-1.5 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100">Delete</a>
-                                    <?php endif; ?>
+                                    <a href="personnel_delete.php?id=<?= urlencode($p['_id']) ?>"
+                                       onclick="return confirm('Delete this personnel? This cannot be undone.');"
+                                       class="ml-1 inline-flex items-center rounded-lg bg-red-50 px-3.5 py-1.5 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100">Delete</a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -306,10 +267,8 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
                 <!-- CARDS (below sm) -->
                 <div class="divide-y divide-slate-100 border-t border-slate-100 sm:hidden">
                     <?php foreach ($personnel as $p):
-                        $role   = strtolower($p['role'] ?? 'staff');
                         $active = $p['isActive'] ?? true;
                         $deptId = $p['departmentId'] ?? null;
-                        $badge  = $roleBadgeMap[$role] ?? $roleBadgeMap['staff'];
                     ?>
                         <div class="p-4">
                             <div class="flex items-start justify-between gap-3">
@@ -323,21 +282,12 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
                                     <span class="inline-block shrink-0 rounded-full border border-slate-200 bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">Inactive</span>
                                 <?php endif; ?>
                             </div>
-                            <p class="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                                <span class="inline-block rounded-full border px-2.5 py-0.5 font-semibold <?= $badge ?>"><?= htmlspecialchars(ucfirst(str_replace('_', ' ', $role))) ?></span>
-                                <?php if ($role === 'super_admin'): ?>
-                                    <em>All departments</em>
-                                <?php else: ?>
-                                    <?= htmlspecialchars(department_name($db, $deptId)) ?>
-                                <?php endif; ?>
-                            </p>
+                            <p class="mt-2 text-xs text-slate-600"><?= htmlspecialchars(department_name($db, $deptId)) ?></p>
                             <div class="mt-3 flex gap-2">
                                 <a href="personnel.php?id=<?= urlencode($p['_id']) ?>" class="flex-1 rounded-lg bg-brand-700 py-2.5 text-center text-sm font-semibold text-white transition-colors hover:bg-brand-800">Edit</a>
-                                <?php if ($p['_id'] !== $ADMIN_ID): ?>
-                                    <a href="personnel_delete.php?id=<?= urlencode($p['_id']) ?>"
-                                       onclick="return confirm('Delete this personnel? This cannot be undone.');"
-                                       class="flex-1 rounded-lg bg-red-50 py-2.5 text-center text-sm font-semibold text-red-700 transition-colors hover:bg-red-100">Delete</a>
-                                <?php endif; ?>
+                                <a href="personnel_delete.php?id=<?= urlencode($p['_id']) ?>"
+                                   onclick="return confirm('Delete this personnel? This cannot be undone.');"
+                                   class="flex-1 rounded-lg bg-red-50 py-2.5 text-center text-sm font-semibold text-red-700 transition-colors hover:bg-red-100">Delete</a>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -356,8 +306,8 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
             <div>
                 <h3 class="text-lg font-bold text-slate-900"><?= $isEdit ? 'Edit Personnel' : 'Add Personnel' ?></h3>
                 <p class="text-xs text-slate-500"><?= $isEdit
-                    ? 'Update this account\'s details or department.'
-                    : 'Create a new admin or staff account and assign a department.' ?></p>
+                    ? 'Update this admin\'s details or department.'
+                    : 'Create a new admin account and assign a department.' ?></p>
             </div>
             <a href="personnel.php" class="flex h-9 w-9 items-center justify-center rounded-lg text-2xl leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close">×</a>
         </div>
@@ -396,17 +346,8 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
                     </div>
 
                     <div>
-                        <label class="mb-1 block text-xs font-semibold text-slate-500" for="roleSelect">Role</label>
-                        <select name="role" id="roleSelect" required onchange="toggleDept()" class="<?= $inputClass ?>">
-                            <option value="staff"       <?= ($person['role'] ?? '') === 'staff'       ? 'selected' : '' ?>>Staff (view-only)</option>
-                            <option value="admin"       <?= ($person['role'] ?? '') === 'admin'       ? 'selected' : '' ?>>Admin (can edit)</option>
-                            <option value="super_admin" <?= ($person['role'] ?? '') === 'super_admin' ? 'selected' : '' ?>>Super Admin (all departments)</option>
-                        </select>
-                    </div>
-
-                    <div id="deptGroup">
                         <label class="mb-1 block text-xs font-semibold text-slate-500" for="deptSelect">Department</label>
-                        <select name="departmentId" id="deptSelect" class="<?= $inputClass ?>">
+                        <select name="departmentId" id="deptSelect" required class="<?= $inputClass ?>">
                             <option value="">— Select Department —</option>
                             <?php foreach (all_departments($db) as $deptId => $deptName): ?>
                                 <option value="<?= htmlspecialchars($deptId) ?>"
@@ -415,7 +356,6 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
                                 </option>
                             <?php endforeach; ?>
                         </select>
-                        <p class="mt-1 text-xs text-slate-400">Required for Staff and Admin. Super Admin sees all departments.</p>
                     </div>
 
                     <label class="flex items-center gap-2 text-sm font-medium text-slate-700">
@@ -436,21 +376,6 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
 </div>
 
 <script>
-function toggleDept() {
-    const role = document.getElementById('roleSelect').value;
-    const group = document.getElementById('deptGroup');
-    const select = document.getElementById('deptSelect');
-
-    if (role === 'super_admin') {
-        group.style.opacity = '0.4';
-        select.removeAttribute('required');
-    } else {
-        group.style.opacity = '1';
-        select.setAttribute('required', 'required');
-    }
-}
-toggleDept();
-
 document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && !document.getElementById('person-modal').classList.contains('hidden')) {
         window.location.href = 'personnel.php';

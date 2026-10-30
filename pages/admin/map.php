@@ -15,7 +15,13 @@ if (file_exists($boundaryPath)) {
 
 try {
 
-    $documents = $db->collection('reports')->documents();
+    // 🔒 Scope: super admin sees all, admins see only reports assigned to them
+    $query = $db->collection('reports');
+    if (!$IS_SUPER_ADMIN) {
+        $query = $query->where('assignedAdminId', '=', $ADMIN_ID);
+    }
+
+    $documents = $query->documents();
 
     foreach ($documents as $document) {
 
@@ -147,7 +153,9 @@ $activePage = 'map';
             <div class="flex shrink-0 items-center justify-between gap-3 p-4 sm:p-5">
                 <div class="min-w-0">
                     <h2 class="text-lg font-bold text-slate-900 sm:text-xl">Report Locations</h2>
-                    <p class="truncate text-xs text-slate-500 sm:text-sm">CitiFix reports within Sampaloc, Manila</p>
+                    <p class="truncate text-xs text-slate-500 sm:text-sm">
+                        <?= $IS_SUPER_ADMIN ? 'CitiFix reports within Sampaloc, Manila' : 'Reports assigned to you' ?>
+                    </p>
                 </div>
                 <div class="flex shrink-0 items-center gap-2 rounded-full bg-brand-50 px-3 py-1.5 text-sm text-brand-700">
                     <span class="inline-block h-2 w-2 rounded-full bg-brand-500"></span>
@@ -196,7 +204,8 @@ const STATUS_COLORS = {
     "pending":     "#f59e0b",
     "in progress": "#3b82f6",
     "in_progress": "#3b82f6",
-    "resolved":    "#22c55e"
+    "resolved":    "#22c55e",
+    "rejected":    "#ef4444"
 };
 
 const IS_TOUCH = window.matchMedia("(pointer: coarse)").matches;
@@ -277,7 +286,7 @@ reports.forEach(function(report) {
 });
 
 // ---- Legend with per-status counts (computed from the reports array) ----
-const statusCounts = { "pending": 0, "in progress": 0, "resolved": 0 };
+const statusCounts = { "pending": 0, "in progress": 0, "resolved": 0, "rejected": 0 };
 
 reports.forEach(function(report) {
     const key = report.status.toLowerCase().replace("_", " ");
@@ -296,7 +305,8 @@ legend.onAdd = function() {
         "<h4>Legend</h4>" +
         "<div class='legend-row'><span class='legend-name'><span class='legend-dot' style='background:#f59e0b'></span>Pending</span><span class='legend-count'>" + statusCounts["pending"] + "</span></div>" +
         "<div class='legend-row'><span class='legend-name'><span class='legend-dot' style='background:#3b82f6'></span>In Progress</span><span class='legend-count'>" + statusCounts["in progress"] + "</span></div>" +
-        "<div class='legend-row'><span class='legend-name'><span class='legend-dot' style='background:#22c55e'></span>Resolved</span><span class='legend-count'>" + statusCounts["resolved"] + "</span></div>";
+        "<div class='legend-row'><span class='legend-name'><span class='legend-dot' style='background:#22c55e'></span>Resolved</span><span class='legend-count'>" + statusCounts["resolved"] + "</span></div>" +
+        "<div class='legend-row'><span class='legend-name'><span class='legend-dot' style='background:#ef4444'></span>Rejected</span><span class='legend-count'>" + statusCounts["rejected"] + "</span></div>";
 
     return div;
 };

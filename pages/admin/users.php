@@ -125,7 +125,6 @@ $roleBadgeMap = [
                                 <th class="px-4 py-3 sm:px-6">Name</th>
                                 <th class="px-4 py-3">Email</th>
                                 <th class="px-4 py-3">Role</th>
-                                <th class="px-4 py-3">Department</th>
                                 <th class="px-4 py-3 sm:px-6">Status</th>
                             </tr>
                         </thead>
@@ -134,7 +133,6 @@ $roleBadgeMap = [
 
                             $role   = strtolower($user['role'] ?? 'resident');
                             $active = $user['isActive'] ?? true;
-                            $deptId = $user['departmentId'] ?? null;
                             $badge  = $roleBadgeMap[$role] ?? $roleBadgeMap['staff'];
 
                         ?>
@@ -145,15 +143,6 @@ $roleBadgeMap = [
                                     <span class="inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold <?= $badge ?>">
                                         <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $role))) ?>
                                     </span>
-                                </td>
-                                <td class="px-4 py-3.5 text-xs text-slate-600">
-                                    <?php if ($role === 'super_admin'): ?>
-                                        <em>All departments</em>
-                                    <?php elseif ($role === 'resident'): ?>
-                                        <em>—</em>
-                                    <?php else: ?>
-                                        <?= htmlspecialchars(department_name($db, $deptId)) ?>
-                                    <?php endif; ?>
                                 </td>
                                 <td class="px-4 py-3.5 sm:px-6">
                                     <?php if ($active): ?>
@@ -174,7 +163,6 @@ $roleBadgeMap = [
 
                         $role   = strtolower($user['role'] ?? 'resident');
                         $active = $user['isActive'] ?? true;
-                        $deptId = $user['departmentId'] ?? null;
                         $badge  = $roleBadgeMap[$role] ?? $roleBadgeMap['staff'];
 
                     ?>
@@ -192,13 +180,6 @@ $roleBadgeMap = [
                             </div>
                             <p class="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
                                 <span class="inline-block rounded-full border px-2.5 py-0.5 font-semibold <?= $badge ?>"><?= htmlspecialchars(ucfirst(str_replace('_', ' ', $role))) ?></span>
-                                <?php if ($role === 'super_admin'): ?>
-                                    <em>All departments</em>
-                                <?php elseif ($role === 'resident'): ?>
-                                    <em>—</em>
-                                <?php else: ?>
-                                    <?= htmlspecialchars(department_name($db, $deptId)) ?>
-                                <?php endif; ?>
                             </p>
                         </div>
                     <?php endforeach; ?>

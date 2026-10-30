@@ -14,26 +14,29 @@ if (empty($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true
 }
 
 /**
- * Load the current admin from Firestore by email.
+ * Load the current account from Firestore using the id + role stored at login.
+ * super_admin → `super_admins` collection, admin → `admins` collection.
  */
 function citifix_current_admin($db): ?array
 {
-    $email = $_SESSION['admin_email'] ?? null;
-    if (!$email) return null;
+    $id   = $_SESSION['admin_id']   ?? null;
+    $role = $_SESSION['admin_role'] ?? null;
 
-    $docs = $db->collection('users')
-        ->where('email', '=', $email)
-        ->limit(1)
-        ->documents();
-
-    foreach ($docs as $doc) {
-        if ($doc->exists()) {
-            $data = $doc->data();
-            $data['_id'] = $doc->id();
-            return $data;
-        }
+    if (!$id || !in_array($role, ['super_admin', 'admin'], true)) {
+        return null;
     }
-    return null;
+
+    $collection = $role === 'super_admin' ? 'super_admins' : 'admins';
+
+    $doc = $db->collection($collection)->document($id)->snapshot();
+    if (!$doc->exists()) {
+        return null;
+    }
+
+    $data = $doc->data();
+    $data['_id']  = $doc->id();
+    $data['role'] = $role;
+    return $data;
 }
 
 $currentUser = citifix_current_admin($db);
@@ -48,17 +51,13 @@ if (!$currentUser || empty($currentUser['isActive'])) {
 $ADMIN_ID       = $currentUser['_id'];
 $ADMIN_EMAIL    = $currentUser['email'] ?? '';
 $ADMIN_NAME     = $currentUser['fullName'] ?? 'Administrator';
-$ADMIN_ROLE     = strtolower($currentUser['role'] ?? 'staff');
-$ADMIN_DEPT     = $currentUser['departmentId'] ?? null;
+$ADMIN_ROLE     = $currentUser['role'];                    // 'super_admin' | 'admin'
+$ADMIN_DEPT     = $currentUser['departmentId'] ?? null;    // informational only
 $IS_SUPER_ADMIN = ($ADMIN_ROLE === 'super_admin');
-
-if (!$IS_SUPER_ADMIN && !$ADMIN_DEPT) {
-    http_response_code(403);
-    die('Your account has no department assigned. Contact the super administrator.');
-}
 
 /**
  * Can this user change report status / notes?
+ * Admins are further limited to their own assigned reports (see assert_report_access).
  */
 function can_edit_reports(): bool
 {
@@ -67,16 +66,29 @@ function can_edit_reports(): bool
 }
 
 /**
- * Hard guard: throw 403 if a report belongs to another dept.
+ * Hard guard: 403 if a report is not assigned to the current admin.
  */
 function assert_report_access(array $report): void
 {
-    global $IS_SUPER_ADMIN, $ADMIN_DEPT;
+    global $IS_SUPER_ADMIN, $ADMIN_ID;
 
     if ($IS_SUPER_ADMIN) return;
 
-    if (($report['departmentId'] ?? null) !== $ADMIN_DEPT) {
+    if (($report['assignedAdminId'] ?? null) !== $ADMIN_ID) {
         http_response_code(403);
-        die('Access denied: this report belongs to another department.');
+        die('Access denied: this report is not assigned to you.');
+    }
+}
+
+/**
+ * Page guard: super admin only.
+ */
+function require_super_admin(): void
+{
+    global $IS_SUPER_ADMIN;
+
+    if (!$IS_SUPER_ADMIN) {
+        http_response_code(403);
+        die('Only super administrators can access this page.');
     }
 }

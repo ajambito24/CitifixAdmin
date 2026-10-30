@@ -9,6 +9,7 @@ return array(
     'AllowDynamicProperties' => $vendorDir . '/symfony/polyfill-php82/Resources/stubs/AllowDynamicProperties.php',
     'Attribute' => $vendorDir . '/symfony/polyfill-php80/Resources/stubs/Attribute.php',
     'Composer\\InstalledVersions' => $vendorDir . '/composer/InstalledVersions.php',
+    'Dompdf\\Cpdf' => $vendorDir . '/dompdf/dompdf/lib/Cpdf.php',
     'GPBMetadata\\GrpcGcp' => $vendorDir . '/google/grpc-gcp/src/generated/GPBMetadata/GrpcGcp.php',
     'Grpc\\Gcp\\AffinityConfig' => $vendorDir . '/google/grpc-gcp/src/generated/Grpc/Gcp/AffinityConfig.php',
     'Grpc\\Gcp\\AffinityConfig_Command' => $vendorDir . '/google/grpc-gcp/src/generated/Grpc/Gcp/AffinityConfig_Command.php',
