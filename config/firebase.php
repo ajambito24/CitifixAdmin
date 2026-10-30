@@ -14,8 +14,10 @@ require_once __DIR__ . '/../vendor/autoload.php';
 use Google\Cloud\Firestore\FirestoreClient;
 use Google\Auth\Credentials\ServiceAccountCredentials;
 
-$serviceAccountPath =
-    __DIR__ . '/../service-account/service-account.json';
+// Render Secret File first, local path as fallback
+$serviceAccountPath = file_exists('/etc/secrets/service-account.json')
+    ? '/etc/secrets/service-account.json'
+    : __DIR__ . '/../service-account/service-account.json';
 
 if (!file_exists($serviceAccountPath)) {
     die('ERROR: service-account.json was not found.');
