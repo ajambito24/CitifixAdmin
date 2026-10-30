@@ -28,8 +28,9 @@ RUN sed -i 's/Listen 80/Listen ${PORT}/' /etc/apache2/ports.conf \
 WORKDIR /var/www/html
 COPY . .
 
-# Build vendor/ on the server (no dev packages)
-RUN composer install --no-dev --optimize-autoloader --no-interaction \
+# Build vendor/ on the server (no dev packages).
+# ext-grpc is skipped on purpose: config/firebase.php forces REST transport.
+RUN composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-req=ext-grpc \
     && chown -R www-data:www-data /var/www/html
 
 EXPOSE 10000
