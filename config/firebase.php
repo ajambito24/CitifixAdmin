@@ -15,8 +15,8 @@ use Google\Cloud\Firestore\FirestoreClient;
 use Google\Auth\Credentials\ServiceAccountCredentials;
 
 // Render Secret File first, local path as fallback
-$serviceAccountPath = file_exists('/etc/secrets/service-account.json')
-    ? '/etc/secrets/service-account.json'
+$serviceAccountPath = file_exists('/var/citifix/service-account.json')
+    ? '/var/citifix/service-account.json'
     : __DIR__ . '/../service-account/service-account.json';
 
 if (!file_exists($serviceAccountPath)) {

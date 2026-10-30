@@ -35,6 +35,7 @@ RUN composer install --no-dev --optimize-autoloader --no-interaction --ignore-pl
 
 EXPOSE 10000
 
-# Render mounts secret files at start-up, readable by root only. Apache runs PHP as
-# www-data, so open read access on the key file, then start Apache as usual.
-CMD ["sh", "-c", "chmod 644 /etc/secrets/service-account.json || echo 'WARNING: could not chmod service-account.json'; exec apache2-foreground"]
+# Render mounts secret files read-only and readable by root only, but Apache runs PHP
+# as www-data. At start-up, copy the key to a private folder outside the web root,
+# give it to www-data (owner-only), then start Apache as usual.
+CMD ["sh", "-c", "mkdir -p /var/citifix && cp /etc/secrets/service-account.json /var/citifix/service-account.json && chown www-data:www-data /var/citifix/service-account.json && chmod 600 /var/citifix/service-account.json || echo 'WARNING: could not prepare service-account.json'; exec apache2-foreground"]

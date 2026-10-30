@@ -52,8 +52,8 @@ function fcm_access_token(): string
         return $cache['token'];
     }
 
-    $path = file_exists('/etc/secrets/service-account.json')
-    ? '/etc/secrets/service-account.json'
+$path = file_exists('/var/citifix/service-account.json')
+    ? '/var/citifix/service-account.json'
     : __DIR__ . '/../service-account/service-account.json';
     if (!file_exists($path)) {
         throw new Exception('service-account.json was not found.');
