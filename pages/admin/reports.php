@@ -98,6 +98,8 @@ try {
             'category'           => $data['category']     ?? 'Unknown',
             'description'        => $data['description']  ?? 'No description',
             'status'             => $data['status']       ?? 'pending',
+            'streetAddress'      => $data['streetAddress'] ?? '',
+            'barangay'           => $data['barangay']      ?? '',
             'latitude'           => $data['latitude']     ?? null,
             'longitude'          => $data['longitude']    ?? null,
             'userFullName'       => $data['userFullName'] ?? 'Unknown User',
@@ -340,6 +342,14 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
 .timeline-entry:last-child::before { display: none; }
 .timeline-dot { position: absolute; left: 0; top: 4px; width: 18px; height: 18px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 1px #cbd5e1; }
 
+/* Flash popup (success / error after saving a report) */
+@keyframes flash-pop-in {
+    from { opacity: 0; transform: scale(0.92) translateY(8px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+#flash-popup { transition: opacity 0.3s ease; }
+#flash-popup.flash-hide { opacity: 0; pointer-events: none; }
+#flash-popup .flash-card { animation: flash-pop-in 0.25s ease-out; }
 </style>
 </head>
 
@@ -393,14 +403,27 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
 
         <?php if ($flash !== null): ?>
             <?php
-                $flashType = $flash['type'] ?? 'success';
-                $flashMsg  = $flash['msg']  ?? '';
-                $flashClasses = $flashType === 'success' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-700';
-                $flashIcon = $flashType === 'success' ? '✅' : '⚠️';
+                $flashType    = $flash['type'] ?? 'success';
+                $flashMsg     = $flash['msg']  ?? '';
+                $flashSuccess = $flashType === 'success';
             ?>
-            <div class="mb-4 flex items-center gap-2 rounded-xl border px-4 py-3 text-sm <?= $flashClasses ?>" role="status">
-                <span><?= $flashIcon ?></span>
-                <span><?= htmlspecialchars($flashMsg) ?></span>
+            <!-- FLASH POPUP: success auto-hides after ~2s, errors stay until closed -->
+            <div id="flash-popup" role="alert" aria-live="assertive" data-type="<?= $flashSuccess ? 'success' : 'error' ?>"
+                 class="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/40 p-4"
+                 onclick="if (event.target === this) closeFlashPopup()">
+                <div class="flash-card w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-2xl">
+                    <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full <?= $flashSuccess ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600' ?>">
+                        <?php if ($flashSuccess): ?>
+                            <svg class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                        <?php else: ?>
+                            <svg class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 6l12 12M18 6L6 18"/></svg>
+                        <?php endif; ?>
+                    </div>
+                    <p class="mt-4 text-base font-semibold text-slate-900"><?= htmlspecialchars($flashMsg) ?></p>
+                    <?php if (!$flashSuccess): ?>
+                        <button type="button" onclick="closeFlashPopup()" class="mt-5 w-full rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-slate-800">Close</button>
+                    <?php endif; ?>
+                </div>
             </div>
         <?php endif; ?>
 
@@ -521,6 +544,10 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                     <div id="modal-description" class="whitespace-pre-wrap text-sm text-slate-700"></div>
                 </div>
                 <div class="mt-4">
+                    <label class="mb-1 block text-xs font-semibold text-slate-500">Address</label>
+                    <div id="modal-address" class="text-sm text-slate-700"></div>
+                </div>
+                <div class="mt-4">
                     <label class="mb-1 block text-xs font-semibold text-slate-500">Location</label>
                     <div id="modal-coords" class="font-mono text-xs text-slate-700"></div>
                 </div>
@@ -603,6 +630,12 @@ function openReportModal(report) {
     document.getElementById("modal-email").textContent = report.userEmail || "";
     document.getElementById("modal-date").textContent = report.createdAtFormatted || "Unknown";
     document.getElementById("modal-description").textContent = report.description || "No description";
+
+    // Typed address (street + barangay). Older reports don't have it.
+    const addressParts = [report.streetAddress, report.barangay].filter(function (part) {
+        return part && String(part).trim() !== "";
+    });
+    document.getElementById("modal-address").textContent = addressParts.length ? addressParts.join(", ") : "—";
 
     let coords = "N/A";
     if (report.latitude !== null && report.longitude !== null) {
@@ -736,6 +769,37 @@ function closeReportModal() {
 document.addEventListener("keydown", function(event) {
     if (event.key === "Escape") closeReportModal();
 });
+
+// ---- Flash popup: success fades out after ~2s, errors stay until closed ----
+let flashHideTimer = null;
+
+function closeFlashPopup() {
+    const popup = document.getElementById("flash-popup");
+    if (!popup) return;
+
+    if (flashHideTimer) {
+        clearTimeout(flashHideTimer);
+        flashHideTimer = null;
+    }
+
+    popup.classList.add("flash-hide");
+    setTimeout(function () {
+        if (popup.parentNode) popup.parentNode.removeChild(popup);
+    }, 300);
+}
+
+(function () {
+    const popup = document.getElementById("flash-popup");
+    if (!popup) return;
+
+    if (popup.dataset.type === "success") {
+        flashHideTimer = setTimeout(closeFlashPopup, 2000);
+    }
+
+    document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") closeFlashPopup();
+    });
+})();
 
 // ---- Status filter (client-side) + export links ----
 const EXPORT_RANGE = <?= json_encode($selectedRange) ?>;

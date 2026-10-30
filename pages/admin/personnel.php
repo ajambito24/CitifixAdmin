@@ -148,6 +148,16 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
 <head>
 <?php require __DIR__ . '/../utils/screen_util.php'; ?>
 <title>CitiFix Personnel</title>
+<style>
+/* Flash popup (success / error after saving or deleting personnel) */
+@keyframes flash-pop-in {
+    from { opacity: 0; transform: scale(0.92) translateY(8px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+#flash-popup { transition: opacity 0.3s ease; }
+#flash-popup.flash-hide { opacity: 0; pointer-events: none; }
+#flash-popup .flash-card { animation: flash-pop-in 0.25s ease-out; }
+</style>
 </head>
 
 <body class="bg-slate-50 text-slate-700 antialiased<?= $modalOpen ? ' overflow-hidden' : '' ?>">
@@ -191,14 +201,27 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
 
         <?php if ($flash !== null): ?>
             <?php
-                $flashType = $flash['type'] ?? 'success';
-                $flashMsg  = $flash['msg']  ?? '';
-                $flashClasses = $flashType === 'success' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-700';
-                $flashIcon = $flashType === 'success' ? '✅' : '⚠️';
+                $flashType    = $flash['type'] ?? 'success';
+                $flashMsg     = $flash['msg']  ?? '';
+                $flashSuccess = $flashType === 'success';
             ?>
-            <div class="mb-4 flex items-center gap-2 rounded-xl border px-4 py-3 text-sm <?= $flashClasses ?>" role="status">
-                <span><?= $flashIcon ?></span>
-                <span><?= htmlspecialchars($flashMsg) ?></span>
+            <!-- FLASH POPUP: success auto-hides after ~2s, errors stay until closed -->
+            <div id="flash-popup" role="alert" aria-live="assertive" data-type="<?= $flashSuccess ? 'success' : 'error' ?>"
+                 class="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/40 p-4"
+                 onclick="if (event.target === this) closeFlashPopup()">
+                <div class="flash-card w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-2xl">
+                    <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full <?= $flashSuccess ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600' ?>">
+                        <?php if ($flashSuccess): ?>
+                            <svg class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                        <?php else: ?>
+                            <svg class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 6l12 12M18 6L6 18"/></svg>
+                        <?php endif; ?>
+                    </div>
+                    <p class="mt-4 text-base font-semibold text-slate-900"><?= htmlspecialchars($flashMsg) ?></p>
+                    <?php if (!$flashSuccess): ?>
+                        <button type="button" onclick="closeFlashPopup()" class="mt-5 w-full rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-slate-800">Close</button>
+                    <?php endif; ?>
+                </div>
             </div>
         <?php endif; ?>
 
@@ -381,6 +404,37 @@ document.addEventListener('keydown', function (e) {
         window.location.href = 'personnel.php';
     }
 });
+
+// ---- Flash popup: success fades out after ~2s, errors stay until closed ----
+let flashHideTimer = null;
+
+function closeFlashPopup() {
+    const popup = document.getElementById('flash-popup');
+    if (!popup) return;
+
+    if (flashHideTimer) {
+        clearTimeout(flashHideTimer);
+        flashHideTimer = null;
+    }
+
+    popup.classList.add('flash-hide');
+    setTimeout(function () {
+        if (popup.parentNode) popup.parentNode.removeChild(popup);
+    }, 300);
+}
+
+(function () {
+    const popup = document.getElementById('flash-popup');
+    if (!popup) return;
+
+    if (popup.dataset.type === 'success') {
+        flashHideTimer = setTimeout(closeFlashPopup, 2000);
+    }
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') closeFlashPopup();
+    });
+})();
 </script>
 
 </body>

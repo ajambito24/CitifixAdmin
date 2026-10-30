@@ -3,7 +3,7 @@
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../config/firebase.php';
 require_once __DIR__ . '/../../config/department_map.php';
-
+require_once __DIR__ . '/../utils/icons_util.php';
 $reports = [];
 
 try {
@@ -155,11 +155,11 @@ $chartValues = array_values($bucketCounts);
 $activePage = 'dashboard';
 
 $statCards = [
-    ['Total Reports', $totalReports, '📋', 'bg-blue-100'],
-    ['Pending',       $pending,      '⏳', 'bg-amber-100'],
-    ['In Progress',   $inProgress,   '🔧', 'bg-purple-100'],
-    ['Resolved',      $resolved,     '✓',  'bg-green-100 text-green-700 font-bold'],
-    ['Rejected',      $rejected,     '✕',  'bg-red-100 text-red-700 font-bold'],
+    ['Total Reports', $totalReports, 'clipboard-data',  'bg-blue-100 text-blue-700'],
+    ['Pending',       $pending,      'hourglass-split', 'bg-amber-100 text-amber-700'],
+    ['In Progress',   $inProgress,   'tools',           'bg-purple-100 text-purple-700'],
+    ['Resolved',      $resolved,     'check-circle',    'bg-green-100 text-green-700'],
+    ['Rejected',      $rejected,     'x-circle',        'bg-red-100 text-red-700'],
 ];
 
 $pillMap = [
@@ -280,7 +280,7 @@ function dash_report_table(array $items, array $pillMap): void
         <section class="grid grid-cols-1 gap-4 xs:grid-cols-2 xl:grid-cols-5 sm:gap-5">
             <?php foreach ($statCards as [$label, $value, $icon, $tint]): ?>
                 <div class="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md">
-                    <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-xl <?= $tint ?>"><?= $icon ?></span>
+                    <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl <?= $tint ?>"><?= cf_icon($icon, 'h-6 w-6') ?></span>
                     <div>
                         <p class="text-sm font-medium text-slate-500"><?= $label ?></p>
                         <h2 class="text-3xl font-extrabold tracking-tight text-slate-900"><?= $value ?></h2>
@@ -448,7 +448,7 @@ function dash_report_table(array $items, array $pillMap): void
             <?php if (empty($reports)): ?>
 
                 <div class="border-t border-slate-100 py-14 text-center">
-                    <div class="text-4xl">📋</div>
+                    <div class="flex justify-center text-slate-300"><?= cf_icon('clipboard-data', 'h-12 w-12') ?></div>
                     <p class="mt-2 text-sm text-slate-500">No reports found.</p>
                 </div>
 
@@ -457,7 +457,7 @@ function dash_report_table(array $items, array $pillMap): void
                 <?php dash_report_table($reports, $pillMap); ?>
 
                 <div id="dash-none" class="<?= empty($byStatus['pending']) ? '' : 'hidden ' ?>border-t border-slate-100 py-14 text-center">
-                    <div class="text-4xl">🔍</div>
+                    <div class="flex justify-center text-slate-300"><?= cf_icon('search', 'h-12 w-12') ?></div>
                     <p class="mt-2 text-sm text-slate-500">No reports with this status.</p>
                 </div>
 

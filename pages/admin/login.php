@@ -98,9 +98,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <h1 class="mt-4 text-2xl font-extrabold tracking-[0.2em] sm:text-3xl lg:mt-6 lg:text-4xl">CITIFIX</h1>
             <p class="text-xs font-semibold tracking-[0.5em] text-brand-200 sm:text-sm lg:text-base">MANILA</p>
 
-            <p class="mt-6 hidden max-w-sm text-base leading-relaxed text-brand-100 lg:block xl:text-lg">
-                Review, assign and resolve community reports from one place.
-            </p>
         </div>
     </section>
 

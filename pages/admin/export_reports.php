@@ -15,9 +15,6 @@ use Dompdf\Options;
 
 date_default_timezone_set('Asia/Manila');
 
-/**
- * Converts a Firestore/PHP date value into a unix timestamp (or null).
- */
 function export_timestamp($value): ?int
 {
     if ($value === null) return null;
@@ -91,10 +88,19 @@ try {
 
         if ($statusFilter !== 'all' && $status !== $statusFilter) continue;
 
+        // Street + barangay, same as the details modal in reports.php
+        $addressParts = array_filter([
+            trim((string) ($data['streetAddress'] ?? '')),
+            trim((string) ($data['barangay'] ?? '')),
+        ], function ($part) {
+            return $part !== '';
+        });
+
         $rows[] = [
             'ref'         => $data['referenceNumber'] ?? strtoupper(substr($doc->id(), 0, 8)),
             'category'    => $data['category'] ?? 'Unknown',
             'department'  => department_name($db, $data['departmentId'] ?? null),
+            'address'     => !empty($addressParts) ? implode(', ', $addressParts) : '—',
             'assigned'    => ($data['assignedAdminName'] ?? '') !== '' ? $data['assignedAdminName'] : 'Unassigned',
             'reporter'    => $data['userFullName'] ?? 'Unknown User',
             'ts'          => $ts ?? 0,
@@ -174,10 +180,10 @@ if ($format === 'pdf') {
         ['Rejected',      $counts['rejected'],    '#fee2e2', '#991b1b'],
     ];
 
-    // column widths (%)
+    // column widths (%), each layout adds up to 100
     $cols = $IS_SUPER_ADMIN
-        ? [['Ref', 7], ['Issue', 11], ['Department', 12], ['Assigned To', 11], ['Reporter', 11], ['Date', 12], ['Status', 8], ['Description', 28]]
-        : [['Ref', 8], ['Issue', 12], ['Department', 14], ['Reporter', 12], ['Date', 13], ['Status', 9], ['Description', 32]];
+        ? [['Ref', 7], ['Issue', 10], ['Department', 11], ['Address', 14], ['Assigned To', 10], ['Reporter', 10], ['Date', 11], ['Status', 8], ['Description', 19]]
+        : [['Ref', 7], ['Issue', 11], ['Department', 12], ['Address', 16], ['Reporter', 11], ['Date', 12], ['Status', 8], ['Description', 23]];
 
     ob_start();
     ?>
@@ -280,6 +286,7 @@ if ($format === 'pdf') {
                 <td class="ref"><?= e($r['ref']) ?></td>
                 <td class="issue"><?= e($r['category']) ?></td>
                 <td><?= e($r['department']) ?></td>
+                <td><?= e($r['address']) ?></td>
                 <?php if ($IS_SUPER_ADMIN): ?><td><?= e($r['assigned']) ?></td><?php endif; ?>
                 <td><?= e($r['reporter']) ?></td>
                 <td><?= e($dateStr) ?></td>
@@ -433,15 +440,16 @@ if (empty($rows)) {
     $section->addText('No reports match this period.', ['italic' => true, 'color' => '64748B']);
 } else {
 
+    // Each layout adds up to $contentW (15138)
     if ($IS_SUPER_ADMIN) {
         $wcols = [
-            ['Ref', 1100], ['Issue', 1700], ['Department', 1900], ['Assigned To', 1800],
-            ['Reporter', 1700], ['Date', 1900], ['Status', 1200], ['Description', 3838],
+            ['Ref', 1000], ['Issue', 1500], ['Department', 1700], ['Address', 2200], ['Assigned To', 1600],
+            ['Reporter', 1500], ['Date', 1800], ['Status', 1200], ['Description', 2638],
         ];
     } else {
         $wcols = [
-            ['Ref', 1200], ['Issue', 1900], ['Department', 2200],
-            ['Reporter', 1900], ['Date', 2000], ['Status', 1300], ['Description', 4638],
+            ['Ref', 1100], ['Issue', 1700], ['Department', 1900], ['Address', 2600],
+            ['Reporter', 1700], ['Date', 1900], ['Status', 1300], ['Description', 2938],
         ];
     }
 
@@ -460,7 +468,7 @@ if (empty($rows)) {
         $desc = mb_strimwidth($desc, 0, 220, '…');
         if ($desc === '') $desc = '—';
 
-        $values = [$r['ref'], $r['category'], $r['department']];
+        $values = [$r['ref'], $r['category'], $r['department'], $r['address']];
         if ($IS_SUPER_ADMIN) $values[] = $r['assigned'];
         $values[] = $r['reporter'];
         $values[] = $r['ts'] ? (new DateTime('@' . $r['ts']))->setTimezone($tz)->format('M j, Y · g:i A') : '—';

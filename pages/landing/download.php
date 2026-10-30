@@ -3,8 +3,8 @@
 $pageTitle   = 'Download and how to use | CitiFix Manila';
 $currentPage = 'download';
 
-// TODO: replace '#' with the real APK or store link.
-$apkUrl = '#';
+
+$apkUrl = 'https://drive.google.com/drive/folders/1tfM7EsrsydVuL2njUFxtaSh63YdKd9NC?usp=sharing';
 
 $steps = [
     ['Create your account',           'Sign up with your details, then log in.'],
@@ -81,7 +81,6 @@ $steps = [
                     <ul class="mt-4 space-y-4 text-sm leading-relaxed text-slate-600">
                         <li><span class="font-semibold text-slate-800">Sampaloc only.</span> Reports outside District 4 can&rsquo;t be submitted.</li>
                         <li><span class="font-semibold text-slate-800">Not for emergencies.</span> Contact emergency services directly when it is urgent.</li>
-                        <li><span class="font-semibold text-slate-800">Weak signal?</span> Save the report offline and it syncs when you are back online.</li>
                         <li><span class="font-semibold text-slate-800">Need help?</span> Ask the in-app chatbot how to file a report.</li>
                     </ul>
                 </aside>

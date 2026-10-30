@@ -3,6 +3,7 @@
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../config/firebase.php';
 require_once __DIR__ . '/../../config/department_map.php';
+require_once __DIR__ . '/../utils/icons_util.php';
 
 // 🔒 Super admin only
 if (!$IS_SUPER_ADMIN) {
@@ -41,6 +42,57 @@ $roleBadgeMap = [
     'staff'       => 'bg-slate-100 text-slate-700 border-slate-200',
     'resident'    => 'bg-teal-100 text-teal-800 border-teal-200',
 ];
+
+/**
+ * Firestore Timestamp / DateTime / string -> "Oct 30, 2026 · 3:45 PM" (Manila time).
+ */
+function users_format_date($value): string
+{
+    if ($value === null) return '';
+
+    if (is_object($value) && method_exists($value, 'get')) {
+        $value = $value->get();
+    }
+
+    if ($value instanceof DateTimeInterface) {
+        $dt = DateTime::createFromFormat('U', (string) $value->getTimestamp());
+    } elseif (is_string($value) && ($ts = strtotime($value)) !== false) {
+        $dt = DateTime::createFromFormat('U', (string) $ts);
+    } else {
+        return '';
+    }
+
+    if (!$dt) return '';
+
+    $dt->setTimezone(new DateTimeZone('Asia/Manila'));
+    return $dt->format('M j, Y') . ' · ' . $dt->format('g:i A');
+}
+
+/**
+ * Only the fields the modal shows (no role, no department, no termsAccepted).
+ * Every value is a plain string; the modal renders "—" for empty ones.
+ */
+$modalUsers = [];
+foreach ($users as $user) {
+    $first = trim((string) ($user['firstName'] ?? ''));
+    $last  = trim((string) ($user['lastName'] ?? ''));
+    $full  = trim((string) ($user['fullName'] ?? ''));
+    if ($full === '') $full = trim($first . ' ' . $last);
+
+    $modalUsers[] = [
+        'name'      => $full !== '' ? $full : 'No Name',
+        'active'    => (bool) ($user['isActive'] ?? true),
+        'firstName' => $first,
+        'lastName'  => $last,
+        'email'     => (string) ($user['email'] ?? ''),
+        'phone'     => (string) ($user['phone'] ?? ''),
+        'street'    => (string) ($user['streetAddress'] ?? ''),
+        'barangay'  => (string) ($user['barangay'] ?? ''),
+        'city'      => (string) ($user['city'] ?? ''),
+        'joined'    => users_format_date($user['createdAt'] ?? null),
+        'id'        => (string) ($user['_id'] ?? ''),
+    ];
+}
 
 ?>
 <!DOCTYPE html>
@@ -111,7 +163,7 @@ $roleBadgeMap = [
             <?php elseif (empty($users)): ?>
 
                 <div class="border-t border-slate-100 py-14 text-center">
-                    <div class="text-4xl">👤</div>
+                    <div class="flex justify-center text-slate-300"><?= cf_icon('person', 'h-12 w-12') ?></div>
                     <p class="mt-2 text-sm text-slate-500">No users found.</p>
                 </div>
 
@@ -122,14 +174,15 @@ $roleBadgeMap = [
                     <table class="w-full min-w-[36rem] text-left text-sm">
                         <thead>
                             <tr class="bg-slate-50 text-xs font-semibold text-slate-500">
-                                <th class="px-4 py-3 sm:px-6">Name</th>
-                                <th class="px-4 py-3">Email</th>
-                                <th class="px-4 py-3">Role</th>
-                                <th class="px-4 py-3 sm:px-6">Status</th>
+                                <th class="w-[26%] px-4 py-3 sm:px-6">Name</th>
+                                <th class="w-[30%] px-4 py-3">Email</th>
+                                <th class="w-[14%] px-4 py-3">Role</th>
+                                <th class="w-[11%] px-4 py-3">Status</th>
+                                <th class="px-4 py-3">Actions</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-100">
-                        <?php foreach ($users as $user):
+                        <?php foreach ($users as $i => $user):
 
                             $role   = strtolower($user['role'] ?? 'resident');
                             $active = $user['isActive'] ?? true;
@@ -137,19 +190,27 @@ $roleBadgeMap = [
 
                         ?>
                             <tr class="transition-colors hover:bg-slate-50">
-                                <td class="px-4 py-3.5 font-semibold text-slate-800 sm:px-6"><?= htmlspecialchars($user['fullName'] ?? 'No Name') ?></td>
-                                <td class="px-4 py-3.5 text-slate-600"><?= htmlspecialchars($user['email'] ?? 'No Email') ?></td>
-                                <td class="px-4 py-3.5">
+                                <td class="px-4 py-2.5 font-semibold text-slate-800 sm:px-6"><?= htmlspecialchars($modalUsers[$i]['name']) ?></td>
+                                <td class="px-4 py-2.5 text-slate-600"><?= htmlspecialchars($user['email'] ?? 'No Email') ?></td>
+                                <td class="px-4 py-2.5">
                                     <span class="inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold <?= $badge ?>">
                                         <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $role))) ?>
                                     </span>
                                 </td>
-                                <td class="px-4 py-3.5 sm:px-6">
+                                <td class="px-4 py-2.5">
                                     <?php if ($active): ?>
                                         <span class="inline-block rounded-full border border-green-200 bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-800">Active</span>
                                     <?php else: ?>
                                         <span class="inline-block rounded-full border border-slate-200 bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">Inactive</span>
                                     <?php endif; ?>
+                                </td>
+                                <td class="px-4 py-1.5 align-middle">
+                                    <button type="button" data-user-index="<?= $i ?>"
+                                            aria-label="View details for <?= htmlspecialchars($modalUsers[$i]['name'], ENT_QUOTES) ?>"
+                                            title="View details"
+                                            class="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-brand-50 hover:text-brand-700">
+                                        <?= cf_icon('eye', 'h-5 w-5') ?>
+                                    </button>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -159,7 +220,7 @@ $roleBadgeMap = [
 
                 <!-- CARDS (below sm) -->
                 <div class="divide-y divide-slate-100 border-t border-slate-100 sm:hidden">
-                    <?php foreach ($users as $user):
+                    <?php foreach ($users as $i => $user):
 
                         $role   = strtolower($user['role'] ?? 'resident');
                         $active = $user['isActive'] ?? true;
@@ -169,7 +230,7 @@ $roleBadgeMap = [
                         <div class="p-4">
                             <div class="flex items-start justify-between gap-3">
                                 <div class="min-w-0">
-                                    <strong class="block truncate text-slate-900"><?= htmlspecialchars($user['fullName'] ?? 'No Name') ?></strong>
+                                    <strong class="block truncate text-slate-900"><?= htmlspecialchars($modalUsers[$i]['name']) ?></strong>
                                     <span class="block truncate text-xs text-slate-500"><?= htmlspecialchars($user['email'] ?? 'No Email') ?></span>
                                 </div>
                                 <?php if ($active): ?>
@@ -178,9 +239,14 @@ $roleBadgeMap = [
                                     <span class="inline-block shrink-0 rounded-full border border-slate-200 bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">Inactive</span>
                                 <?php endif; ?>
                             </div>
-                            <p class="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                                <span class="inline-block rounded-full border px-2.5 py-0.5 font-semibold <?= $badge ?>"><?= htmlspecialchars(ucfirst(str_replace('_', ' ', $role))) ?></span>
-                            </p>
+                            <div class="mt-2 flex items-center justify-between gap-2">
+                                <span class="inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold <?= $badge ?>"><?= htmlspecialchars(ucfirst(str_replace('_', ' ', $role))) ?></span>
+                                <button type="button" data-user-index="<?= $i ?>"
+                                        aria-label="View details for <?= htmlspecialchars($modalUsers[$i]['name'], ENT_QUOTES) ?>"
+                                        class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-brand-50 hover:text-brand-700">
+                                    <?= cf_icon('eye', 'h-5 w-5') ?>
+                                </button>
+                            </div>
                         </div>
                     <?php endforeach; ?>
                 </div>
@@ -191,6 +257,120 @@ $roleBadgeMap = [
 
     </main>
 </div>
+
+<!-- USER DETAIL MODAL (view only) -->
+<div id="user-modal" class="fixed inset-0 z-[70] hidden" role="dialog" aria-modal="true" aria-labelledby="um-name">
+
+    <div id="um-backdrop" class="absolute inset-0 bg-slate-900/55"></div>
+
+    <div class="absolute inset-x-0 bottom-0 flex max-h-[90dvh] flex-col rounded-t-2xl bg-white shadow-xl sm:inset-0 sm:m-auto sm:h-fit sm:max-h-[85dvh] sm:w-full sm:max-w-lg sm:rounded-2xl"
+         style="padding-bottom: env(safe-area-inset-bottom, 0px);">
+
+        <!-- Header -->
+        <div class="flex items-start gap-3 border-b border-slate-100 p-4 sm:p-6">
+            <div id="um-avatar" class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-brand-700 text-lg font-extrabold text-white"></div>
+            <div class="min-w-0 flex-1">
+                <h2 id="um-name" class="truncate text-lg font-bold text-slate-900"></h2>
+                <span id="um-status" class="mt-1 inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold"></span>
+            </div>
+            <button type="button" id="um-close" aria-label="Close"
+                    class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800">
+                <?= cf_icon('x-lg', 'h-5 w-5') ?>
+            </button>
+        </div>
+
+        <!-- Body -->
+        <dl id="um-body" class="grid grid-cols-1 gap-x-6 gap-y-4 overflow-y-auto p-4 text-sm sm:grid-cols-2 sm:p-6"></dl>
+
+    </div>
+</div>
+
+<script>
+(function () {
+    var USERS = <?= json_encode($modalUsers, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?>;
+
+    // label, key, spans both columns on sm+
+    var FIELDS = [
+        ['First name',     'firstName', false],
+        ['Last name',      'lastName',  false],
+        ['Email',          'email',     true],
+        ['Phone',          'phone',     false],
+        ['Barangay',       'barangay',  false],
+        ['Street address', 'street',    true],
+        ['City',           'city',      false],
+        ['Member since',   'joined',    false],
+        ['User ID',        'id',        true]
+    ];
+
+    var ACTIVE_CLASS   = 'border-green-200 bg-green-100 text-green-800';
+    var INACTIVE_CLASS = 'border-slate-200 bg-slate-100 text-slate-600';
+
+    var modal  = document.getElementById('user-modal');
+    var body   = document.getElementById('um-body');
+    var nameEl = document.getElementById('um-name');
+    var avatar = document.getElementById('um-avatar');
+    var status = document.getElementById('um-status');
+    var closeB = document.getElementById('um-close');
+    var lastTrigger = null;
+
+    function fill(u) {
+        nameEl.textContent = u.name;
+        avatar.textContent = (u.name.charAt(0) || '?').toUpperCase();
+
+        status.textContent = u.active ? 'Active' : 'Inactive';
+        status.className = 'mt-1 inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold ' +
+            (u.active ? ACTIVE_CLASS : INACTIVE_CLASS);
+
+        body.textContent = '';
+        FIELDS.forEach(function (f) {
+            var wrap = document.createElement('div');
+            wrap.className = 'min-w-0' + (f[2] ? ' sm:col-span-2' : '');
+
+            var dt = document.createElement('dt');
+            dt.className = 'text-xs font-semibold text-slate-500';
+            dt.textContent = f[0];
+
+            var dd = document.createElement('dd');
+            var val = u[f[1]];
+            var empty = !val;
+            dd.className = 'mt-0.5 break-words font-medium ' + (empty ? 'text-slate-400' : 'text-slate-800') +
+                (f[1] === 'id' ? ' font-mono text-xs' : '');
+            dd.textContent = empty ? '—' : val;
+
+            wrap.appendChild(dt);
+            wrap.appendChild(dd);
+            body.appendChild(wrap);
+        });
+    }
+
+    function openModal(index, trigger) {
+        var u = USERS[index];
+        if (!u) return;
+        lastTrigger = trigger || null;
+        fill(u);
+        modal.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+        closeB.focus();
+    }
+
+    function closeModal() {
+        modal.classList.add('hidden');
+        document.body.style.overflow = '';
+        if (lastTrigger) lastTrigger.focus();
+    }
+
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-user-index]');
+        if (btn) openModal(parseInt(btn.getAttribute('data-user-index'), 10), btn);
+    });
+
+    closeB.addEventListener('click', closeModal);
+    document.getElementById('um-backdrop').addEventListener('click', closeModal);
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
+    });
+})();
+</script>
 
 </body>
 </html>

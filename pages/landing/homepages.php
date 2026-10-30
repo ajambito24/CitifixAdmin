@@ -231,7 +231,6 @@ $annModalData = array_map(static function ($p) {
                 $features = [
                     ['camera',  'bg-brand-100 text-brand-700',   'Photo and exact location', 'Attach a photo and pin the spot with GPS so staff know exactly where to go.'],
                     ['geo-alt', 'bg-green-100 text-green-700',   'Sampaloc coverage check',  'Reports are checked against the Sampaloc boundary, so they reach the right district.'],
-                    ['wifi',    'bg-orange-100 text-orange-700', 'Works with a weak signal', 'Save a report offline. It syncs when your connection comes back.'],
                     ['bell',    'bg-purple-100 text-purple-700', 'Status notifications',     'Get notified when your report moves from Pending to In Progress to Resolved.'],
                 ];
                 foreach ($features as [$icon, $tint, $title, $text]): ?>

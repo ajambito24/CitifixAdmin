@@ -3,6 +3,7 @@
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../config/firebase.php';
 require_once __DIR__ . '/../../config/department_map.php';
+require_once __DIR__ . '/../../config/fcm.php';
 
 // 🔒 Only admins / super admins can update
 if (!can_edit_reports()) {
@@ -85,6 +86,9 @@ try {
 
     $statusChanged = ($lastStatus !== $status);
 
+    // Status the report had before this save (used to decide on the push).
+    $previousStatus = strtolower(trim((string) ($current['status'] ?? 'pending')));
+
     if ($statusChanged) {
         $history[] = [
             'status' => $status,
@@ -159,9 +163,60 @@ try {
             [ 'merge' => true ]
         );
 
+    // 🔔 Push to the report owner — only when the status really changed
+    // (never for "pending", same as the in-app notification list).
+    // Best effort: the report is already saved, so a push failure must not
+    // turn the update into an error.
+    $pushFailed = false;
+
+    if ($statusChanged && $previousStatus !== $status && $status !== 'pending') {
+        $ownerId = (string) ($current['userId'] ?? '');
+
+        try {
+            if ($ownerId !== '') {
+                $ownerSnap = $db->collection('users')->document($ownerId)->snapshot();
+                $fcmToken  = $ownerSnap->exists()
+                    ? (string) ($ownerSnap->data()['fcmToken'] ?? '')
+                    : '';
+
+                // No token = the resident hasn't enabled push (or logged out): nothing to send.
+                if ($fcmToken !== '') {
+                    $ref = fcm_report_reference($reportId, $current);
+
+                    fcm_send_to_token(
+                        $fcmToken,
+                        fcm_report_title($ref, $status),
+                        (string) ($current['category'] ?? 'Issue'),
+                        ['type' => 'report', 'id' => $reportId]
+                    );
+                }
+            }
+        } catch (Throwable $e) {
+            if (fcm_is_unregistered($e) && $ownerId !== '') {
+                // The token is dead (app uninstalled, data cleared, ...).
+                // Remove it so we stop sending to it; the app saves a fresh
+                // one the next time the resident opens it. Not an error for
+                // the admin, so no warning flash.
+                try {
+                    $db->collection('users')->document($ownerId)->update([
+                        ['path' => 'fcmToken', 'value' => \Google\Cloud\Firestore\FieldValue::deleteField()],
+                    ]);
+                } catch (Throwable $cleanupError) {
+                    error_log('FCM stale token cleanup failed: ' . $cleanupError->getMessage());
+                }
+                error_log('FCM token removed (UNREGISTERED) for user ' . $ownerId);
+            } else {
+                $pushFailed = true;
+                error_log('FCM report push failed: ' . $e->getMessage());
+            }
+        }
+    }
+
     $_SESSION['flash'] = [
         'type' => 'success',
-        'msg'  => 'Report updated successfully.'
+        'msg'  => $pushFailed
+            ? 'Report updated, but the push notification could not be sent.'
+            : 'Report updated successfully.'
     ];
 
 } catch (Exception $e) {

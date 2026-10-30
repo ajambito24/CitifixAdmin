@@ -58,7 +58,6 @@ $currentPage = 'about';
                     <h3 class="mt-5 text-xl font-bold text-slate-900">For residents</h3>
                     <ul class="mt-4 space-y-2.5 text-slate-600">
                         <li class="flex gap-3"><span class="text-brand-600">✓</span><span>Submit reports with a category, description, photo, and GPS location</span></li>
-                        <li class="flex gap-3"><span class="text-brand-600">✓</span><span>Save reports offline and sync them later</span></li>
                         <li class="flex gap-3"><span class="text-brand-600">✓</span><span>Follow each report&rsquo;s status and get notifications</span></li>
                         <li class="flex gap-3"><span class="text-brand-600">✓</span><span>Ask the chatbot for help with filing a report</span></li>
                     </ul>

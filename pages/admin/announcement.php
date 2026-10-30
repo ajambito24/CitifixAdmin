@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../config/firebase.php';
+require_once __DIR__ . '/../../config/fcm.php';
 
 $canPost = !empty($IS_SUPER_ADMIN);
 
@@ -177,7 +178,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         try {
-            $db->collection('announcements')->add([
+            $newDoc = $db->collection('announcements')->add([
                 'text'       => $text,
                 'imageUrl'   => $imagePath,
                 'authorId'   => $ADMIN_ID,
@@ -189,7 +190,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ann_flash('error', 'Post failed: ' . $e->getMessage());
         }
 
-        ann_flash('success', 'Announcement posted.');
+        // Push to every resident subscribed to the "announcements" topic.
+        // Best effort: the announcement is already saved, so a push failure
+        // must not undo or hide it.
+        $pushSent = true;
+        try {
+            fcm_send_to_topic(
+                'New announcement',
+                $text !== '' ? fcm_excerpt($text) : 'Photo',
+                ['type' => 'announcement', 'id' => $newDoc->id()]
+            );
+        } catch (Throwable $e) {
+            $pushSent = false;
+            error_log('FCM announcement push failed: ' . $e->getMessage());
+        }
+
+        ann_flash(
+            'success',
+            $pushSent
+                ? 'Announcement posted.'
+                : 'Announcement posted, but the push notification could not be sent.'
+        );
     }
 
     // ---------- DELETE ----------
