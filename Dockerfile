@@ -34,3 +34,7 @@ RUN composer install --no-dev --optimize-autoloader --no-interaction --ignore-pl
     && chown -R www-data:www-data /var/www/html
 
 EXPOSE 10000
+
+# Render mounts secret files at start-up, readable by root only. Apache runs PHP as
+# www-data, so open read access on the key file, then start Apache as usual.
+CMD ["sh", "-c", "chmod 644 /etc/secrets/service-account.json || echo 'WARNING: could not chmod service-account.json'; exec apache2-foreground"]
