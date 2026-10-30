@@ -13,6 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && docker-php-ext-install -j"$(nproc)" gd zip \
     && rm -rf /var/lib/apt/lists/*
 
+# bcmath: the Firestore/protobuf library calls bccomp() when writing timestamps
+RUN docker-php-ext-install bcmath
+
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 # Production PHP settings (errors hidden), Manila timezone, room for announcement photos
