@@ -57,15 +57,17 @@ if ($isEdit && $_SERVER['REQUEST_METHOD'] !== 'POST') {
 // ---- Submit ----
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    $fullName   = trim($_POST['fullName'] ?? '');
+    $firstName  = trim($_POST['firstName'] ?? '');
+    $surname    = trim($_POST['surname'] ?? '');
+    $fullName   = trim($firstName . ' ' . $surname);
     $email      = trim($_POST['email'] ?? '');
     $password   = $_POST['password'] ?? '';
     $department = trim($_POST['departmentId'] ?? '');
     $isActive   = !empty($_POST['isActive']);
 
     // Validation
-    if ($fullName === '' || $email === '') {
-        $formError = 'Name and email are required.';
+    if ($firstName === '' || $surname === '' || $email === '') {
+        $formError = 'First name, surname and email are required.';
     } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $formError = 'Please enter a valid email address.';
     } elseif ($department === '') {
@@ -141,6 +143,17 @@ $activePage = 'personnel';
 $modalOpen = $_SERVER['REQUEST_METHOD'] === 'POST' || $id !== '' || isset($_GET['add']);
 
 $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100';
+
+// Split for the add/edit dialog inputs (display only; saved value is still fullName)
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $personFirst   = trim($_POST['firstName'] ?? '');
+    $personSurname = trim($_POST['surname'] ?? '');
+} else {
+    $fullForSplit  = trim($person['fullName'] ?? '');
+    $splitPos      = strrpos($fullForSplit, ' ');
+    $personFirst   = $splitPos === false ? $fullForSplit : substr($fullForSplit, 0, $splitPos);
+    $personSurname = $splitPos === false ? '' : substr($fullForSplit, $splitPos + 1);
+}
 
 ?>
 <!DOCTYPE html>
@@ -348,10 +361,17 @@ $inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 te
                 <?php endif; ?>
 
                 <div class="space-y-4">
-                    <div>
-                        <label class="mb-1 block text-xs font-semibold text-slate-500" for="fullName">Full Name</label>
-                        <input type="text" id="fullName" name="fullName" required class="<?= $inputClass ?>"
-                               value="<?= htmlspecialchars($person['fullName'] ?? '') ?>">
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold text-slate-500" for="firstName">First Name</label>
+                            <input type="text" id="firstName" name="firstName" required class="<?= $inputClass ?>"
+                                   value="<?= htmlspecialchars($personFirst) ?>">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold text-slate-500" for="surname">Surname</label>
+                            <input type="text" id="surname" name="surname" required class="<?= $inputClass ?>"
+                                   value="<?= htmlspecialchars($personSurname) ?>">
+                        </div>
                     </div>
 
                     <div>
