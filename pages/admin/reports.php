@@ -257,7 +257,17 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
             </thead>
             <tbody data-sort-list class="divide-y divide-slate-100">
             <?php foreach ($items as $row): $report = $row['report']; ?>
-                <tr data-id="<?= htmlspecialchars($report['id']) ?>" data-ts="<?= (int) $report['createdAtTs'] ?>" data-status="<?= htmlspecialchars($row['filter']) ?>" class="report-row transition-colors hover:bg-slate-50"<?= ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus) ? ' style="display:none"' : '' ?>>
+                <tr data-id="<?= htmlspecialchars($report['id']) ?>" data-ts="<?= (int) $report['createdAtTs'] ?>" data-status="<?= htmlspecialchars($row['filter']) ?>" data-search="<?= htmlspecialchars(strtolower(implode(' ', [
+                        $report['id'],
+                        $report['category'],
+                        $report['description'],
+                        $report['userFullName'],
+                        $report['userEmail'],
+                        $report['streetAddress'],
+                        $report['barangay'],
+                        $report['assignedAdminName'],
+                        department_name($db, $report['departmentId'] ?? null),
+                    ]))) ?>" class="report-row transition-colors hover:bg-slate-50"<?= ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus) ? ' style="display:none"' : '' ?>>
                     <td class="px-4 py-3.5 font-mono text-xs text-slate-500 sm:px-6"><?= htmlspecialchars(substr($report['id'], 0, 8)) ?></td>
                     <td class="px-4 py-3.5"><strong class="text-slate-800"><?= htmlspecialchars($report['category']) ?></strong></td>
                     <td class="px-4 py-3.5 text-xs text-slate-600"><?= htmlspecialchars(department_name($db, $report['departmentId'] ?? null)) ?></td>
@@ -293,7 +303,17 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
     <!-- CARDS (below sm) -->
     <div data-sort-list class="divide-y divide-slate-100 border-t border-slate-100 sm:hidden">
         <?php foreach ($items as $row): $report = $row['report']; ?>
-            <div data-id="<?= htmlspecialchars($report['id']) ?>" data-ts="<?= (int) $report['createdAtTs'] ?>" data-status="<?= htmlspecialchars($row['filter']) ?>" class="report-row p-4"<?= ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus) ? ' style="display:none"' : '' ?>>
+            <div data-id="<?= htmlspecialchars($report['id']) ?>" data-ts="<?= (int) $report['createdAtTs'] ?>" data-status="<?= htmlspecialchars($row['filter']) ?>" data-search="<?= htmlspecialchars(strtolower(implode(' ', [
+                    $report['id'],
+                    $report['category'],
+                    $report['description'],
+                    $report['userFullName'],
+                    $report['userEmail'],
+                    $report['streetAddress'],
+                    $report['barangay'],
+                    $report['assignedAdminName'],
+                    department_name($db, $report['departmentId'] ?? null),
+                ]))) ?>" class="report-row p-4"<?= ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus) ? ' style="display:none"' : '' ?>>
                 <div class="flex items-start justify-between gap-3">
                     <strong class="min-w-0 truncate text-slate-900"><?= htmlspecialchars($report['category']) ?></strong>
                     <span class="inline-block shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize <?= $row['pill'] ?>">
@@ -443,6 +463,13 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                     </p>
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
+
+                    <!-- SEARCH -->
+                    <div class="relative">
+                        <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z"/></svg>
+                        <input type="search" id="report-search" placeholder="Search reports…" aria-label="Search reports" autocomplete="off" oninput="applyStatusFilter(document.getElementById('status-select').value)" class="w-44 rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 sm:w-56">
+                    </div>
+
                     <select id="status-select" aria-label="Report status" onchange="applyStatusFilter(this.value)" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100">
                         <?php foreach ($statusOptions as $sk => $sl): ?>
                             <?php $n = $sk === 'all' ? $countAll : $statusCounts[$sk]; ?>
@@ -471,6 +498,10 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                                 <span class="inline-flex h-6 w-6 items-center justify-center rounded bg-red-100 text-[10px] font-bold text-red-700">PDF</span>
                                 PDF (.pdf)
                             </a>
+                            <a id="export-xlsx" role="menuitem" href="export_reports.php?range=<?= urlencode($selectedRange) ?>&amp;format=xlsx&amp;status=all" class="flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                               <span class="inline-flex h-6 w-6 items-center justify-center rounded bg-green-100 text-[10px] font-bold text-green-700">X</span>
+                                 Excel (.xlsx)
+                                </a>
                         </div>
                     </div>
 
@@ -495,7 +526,7 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
             </div>
             <div id="no-results" class="<?= ($visibleCount === 0 && !empty($rows)) ? '' : 'hidden ' ?>border-t border-slate-100 py-14 text-center">
                 <div class="text-4xl">🔍</div>
-                <p class="mt-2 text-sm text-slate-500">No reports with this status.</p>
+                <p class="mt-2 text-sm text-slate-500">No matching reports.</p>
             </div>
         </section>
 
@@ -801,7 +832,7 @@ function closeFlashPopup() {
     });
 })();
 
-// ---- Status filter (client-side) + export links ----
+// ---- Status filter + search (client-side) + export links ----
 const EXPORT_RANGE = <?= json_encode($selectedRange) ?>;
 const STATUS_TITLES = <?= json_encode($statusTitles) ?>;
 
@@ -809,7 +840,7 @@ function updateExportLinks() {
     const statusSel = document.getElementById("status-select");
     const status = statusSel ? statusSel.value : "all";
 
-    ["docx", "pdf"].forEach(function (fmt) {
+    ["docx", "pdf", "xlsx"].forEach(function (fmt) {
         const a = document.getElementById("export-" + fmt);
         if (!a) return;
         a.href = "export_reports.php?range=" + encodeURIComponent(EXPORT_RANGE) +
@@ -822,9 +853,13 @@ function applyStatusFilter(value) {
     const sel = document.getElementById("status-select");
     if (sel && sel.value !== value) sel.value = value;
 
+    const searchEl = document.getElementById("report-search");
+    const term = searchEl ? searchEl.value.trim().toLowerCase() : "";
+
     document.querySelectorAll(".report-row").forEach(function (row) {
-        const show = value === "all" || row.dataset.status === value;
-        row.style.display = show ? "" : "none";
+        const matchesStatus = value === "all" || row.dataset.status === value;
+        const matchesSearch = term === "" || (row.dataset.search || "").indexOf(term) !== -1;
+        row.style.display = (matchesStatus && matchesSearch) ? "" : "none";
     });
 
     // Count from the table rows only (cards duplicate them on mobile).

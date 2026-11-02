@@ -12,6 +12,12 @@ use PhpOffice\PhpWord\Settings;
 use PhpOffice\PhpWord\SimpleType\Jc;
 use Dompdf\Dompdf;
 use Dompdf\Options;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
+use PhpOffice\PhpSpreadsheet\Cell\DataType;
+use PhpOffice\PhpSpreadsheet\Style\Alignment;
+use PhpOffice\PhpSpreadsheet\Style\Fill;
 
 date_default_timezone_set('Asia/Manila');
 
@@ -40,7 +46,7 @@ function e($v): string
 // Inputs: format, period, status
 // ---------------------------------------------------------------------
 $format = strtolower($_GET['format'] ?? 'docx');
-if (!in_array($format, ['docx', 'pdf'], true)) {
+if (!in_array($format, ['docx', 'pdf', 'xlsx'], true)) {
     $format = 'docx';
 }
 
@@ -326,9 +332,188 @@ if ($format === 'pdf') {
         );
 
         send_download($dompdf->output(), 'application/pdf', $fileBase . '.pdf');
-    } catch (Throwable $e) {
+    } catch (\Throwable $e) {
         http_response_code(500);
         die('Unable to build the PDF: ' . $e->getMessage());
+    }
+}
+
+// =====================================================================
+// EXCEL (.xlsx)
+// =====================================================================
+if ($format === 'xlsx') {
+
+    if (!class_exists(Spreadsheet::class)) {
+        http_response_code(500);
+        die('PhpSpreadsheet is not installed. Run: composer require phpoffice/phpspreadsheet');
+    }
+
+    // Always store user text as a plain string (stops "=..." being run as a formula)
+    $put = function ($sheet, string $cell, $val): void {
+        $sheet->setCellValueExplicit($cell, (string) $val, DataType::TYPE_STRING);
+    };
+    $paint = function ($sheet, string $range, string $bg, string $fg, bool $bold = false, int $size = 10): void {
+        $style = $sheet->getStyle($range);
+        $style->getFill()->setFillType(Fill::FILL_SOLID)->getStartColor()->setRGB($bg);
+        $style->getFont()->setBold($bold)->setSize($size)->getColor()->setRGB($fg);
+    };
+
+    $tmp = null;
+
+    try {
+        $spreadsheet = new Spreadsheet();
+        $spreadsheet->getProperties()->setTitle('CitiFix Manila - Reports Report')->setCreator('CitiFix Manila');
+
+        // ---------------- Sheet 1: Summary ----------------
+        $s = $spreadsheet->getActiveSheet();
+        $s->setTitle('Summary');
+        $s->setShowGridLines(false);
+        foreach (['A' => 26, 'B' => 20, 'C' => 20, 'D' => 20, 'E' => 20] as $c => $w) {
+            $s->getColumnDimension($c)->setWidth($w);
+        }
+
+        $s->mergeCells('A1:E1');
+        $s->mergeCells('A2:E2');
+        $put($s, 'A1', 'CitiFix Manila');
+        $put($s, 'A2', 'Community Reports Summary  ·  ' . $rangeLabel);
+        $paint($s, 'A1:E2', $NAVY, 'FFFFFF');
+        $s->getStyle('A1')->getFont()->setBold(true)->setSize(20);
+        $s->getStyle('A2')->getFont()->setSize(11)->getColor()->setRGB('BFDBFE');
+        $s->getRowDimension(1)->setRowHeight(32);
+        $s->getRowDimension(2)->setRowHeight(22);
+
+        $row = 4;
+        foreach ($meta as [$k, $v]) {
+            $put($s, "A{$row}", $k);
+            $s->getStyle("A{$row}")->getFont()->setBold(true)->getColor()->setRGB('475569');
+            $s->mergeCells("B{$row}:E{$row}");
+            $put($s, "B{$row}", $v);
+            $row++;
+        }
+
+        // Summary cards
+        $row++;
+        $xCards = [
+            ['Total Reports', $total,                 'DBEAFE', $NAVY],
+            ['Pending',       $counts['pending'],     'FEF3C7', '92400E'],
+            ['In Progress',   $counts['in progress'], 'EDE9FE', '5B21B6'],
+            ['Resolved',      $counts['resolved'],    'DCFCE7', '166534'],
+            ['Rejected',      $counts['rejected'],    'FEE2E2', '991B1B'],
+        ];
+        foreach ($xCards as $i => [$label, $value, $bg, $fg]) {
+            $col = Coordinate::stringFromColumnIndex($i + 1);
+            $put($s, "{$col}{$row}", $label);
+            $s->setCellValue($col . ($row + 1), $value);
+            $paint($s, "{$col}{$row}:{$col}" . ($row + 1), $bg, $fg, true, 9);
+            $s->getStyle($col . ($row + 1))->getFont()->setSize(20);
+            $s->getStyle("{$col}{$row}:{$col}" . ($row + 1))->getAlignment()->setHorizontal(Alignment::HORIZONTAL_LEFT);
+        }
+        $s->getRowDimension($row + 1)->setRowHeight(34);
+        $row += 3;
+
+        // By category
+        $put($s, "A{$row}", 'Reports by Category');
+        $s->getStyle("A{$row}")->getFont()->setBold(true)->setSize(13)->getColor()->setRGB($NAVY);
+        $row++;
+
+        if (empty($categories)) {
+            $put($s, "A{$row}", 'No reports match this period.');
+            $s->getStyle("A{$row}")->getFont()->setItalic(true)->getColor()->setRGB('64748B');
+        } else {
+            foreach (['Category', 'Reports', 'Share'] as $i => $h) {
+                $put($s, Coordinate::stringFromColumnIndex($i + 1) . $row, $h);
+            }
+            $paint($s, "A{$row}:C{$row}", $BRAND, 'FFFFFF', true, 9);
+            $row++;
+
+            $i = 0;
+            foreach ($categories as $name => $n) {
+                $put($s, "A{$row}", $name);
+                $s->setCellValue("B{$row}", $n);
+                $put($s, "C{$row}", round($n / $total * 100) . '%');
+                $paint($s, "A{$row}:C{$row}", ($i++ % 2) ? 'F8FAFC' : 'FFFFFF', '1E293B', false, 9);
+                $s->getStyle("B{$row}:C{$row}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_LEFT);
+                $row++;
+            }
+        }
+
+        // ---------------- Sheet 2: Reports ----------------
+        $d = $spreadsheet->createSheet();
+        $d->setTitle('Reports');
+
+        $xcols = $IS_SUPER_ADMIN
+            ? [['Ref', 12], ['Issue', 20], ['Department', 22], ['Address', 32], ['Assigned To', 22], ['Reporter', 22], ['Date', 22], ['Status', 14], ['Description', 60]]
+            : [['Ref', 12], ['Issue', 20], ['Department', 22], ['Address', 32], ['Reporter', 22], ['Date', 22], ['Status', 14], ['Description', 60]];
+
+        $lastCol = Coordinate::stringFromColumnIndex(count($xcols));
+
+        foreach ($xcols as $i => [$h, $w]) {
+            $col = Coordinate::stringFromColumnIndex($i + 1);
+            $d->getColumnDimension($col)->setWidth($w);
+            $put($d, "{$col}1", $h);
+        }
+        $paint($d, "A1:{$lastCol}1", $BRAND, 'FFFFFF', true, 9);
+        $d->getStyle("A1:{$lastCol}1")->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
+        $d->getRowDimension(1)->setRowHeight(22);
+        $d->freezePane('A2');
+
+        if (empty($rows)) {
+            $put($d, 'A2', 'No reports match this period.');
+            $d->getStyle('A2')->getFont()->setItalic(true)->getColor()->setRGB('64748B');
+        } else {
+            $line = 2;
+            $i = 0;
+            $statusCol = Coordinate::stringFromColumnIndex(count($xcols) - 1);
+
+            foreach ($rows as $rep) {
+                $st   = $statusStyle[$rep['status']] ?? ['bg' => 'F1F5F9', 'fg' => '334155', 'label' => ucfirst($rep['status'])];
+                $desc = preg_replace('/\s+/', ' ', trim($rep['description']));
+                $desc = mb_strimwidth($desc, 0, 220, '…');
+                if ($desc === '') $desc = '—';
+                $dateStr = $rep['ts'] ? (new DateTime('@' . $rep['ts']))->setTimezone($tz)->format('M j, Y · g:i A') : '—';
+
+                $values = [$rep['ref'], $rep['category'], $rep['department'], $rep['address']];
+                if ($IS_SUPER_ADMIN) $values[] = $rep['assigned'];
+                $values[] = $rep['reporter'];
+                $values[] = $dateStr;
+                $values[] = $st['label'];
+                $values[] = $desc;
+
+                foreach ($values as $ci => $val) {
+                    $put($d, Coordinate::stringFromColumnIndex($ci + 1) . $line, $val);
+                }
+
+                $paint($d, "A{$line}:{$lastCol}{$line}", ($i++ % 2) ? 'F8FAFC' : 'FFFFFF', '1E293B', false, 9);
+                $d->getStyle("A{$line}:{$lastCol}{$line}")->getAlignment()
+                  ->setVertical(Alignment::VERTICAL_TOP)->setWrapText(true);
+
+                // Ref, Issue, Status, Description get the same accents as the PDF/Word
+                $d->getStyle("A{$line}")->getFont()->setName('Consolas')->setSize(8)->getColor()->setRGB('64748B');
+                $d->getStyle("B{$line}")->getFont()->setBold(true)->getColor()->setRGB('0F172A');
+                $paint($d, "{$statusCol}{$line}", $st['bg'], $st['fg'], true, 9);
+                $d->getStyle("{$lastCol}{$line}")->getFont()->setSize(8)->getColor()->setRGB('475569');
+
+                $line++;
+            }
+            $d->setAutoFilter("A1:{$lastCol}" . ($line - 1));
+        }
+
+        $spreadsheet->setActiveSheetIndex(0);
+
+        $tmp = tempnam(sys_get_temp_dir(), 'cfx');
+        (new Xlsx($spreadsheet))->save($tmp);
+        $bytes = file_get_contents($tmp);
+        @unlink($tmp);
+
+        send_download(
+            $bytes,
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            $fileBase . '.xlsx'
+        );
+    } catch (Throwable $e) {
+        if ($tmp) @unlink($tmp);
+        http_response_code(500);
+        die('Unable to build the spreadsheet: ' . $e->getMessage());
     }
 }
 
@@ -346,7 +531,7 @@ $phpWord = new PhpWord();
 $phpWord->setDefaultFontName('Calibri');
 $phpWord->setDefaultFontSize(10);
 $phpWord->setDefaultParagraphStyle(['spaceAfter' => 0, 'spaceBefore' => 0]);
-$phpWord->getDocInfo()->setTitle('CitiFix Manila – Reports Report');
+$phpWord->getDocInfo()->setTitle('CitiFix Manila - Reports Report');
 $phpWord->getDocInfo()->setCreator('CitiFix Manila');
 
 $section = $phpWord->addSection([
@@ -506,12 +691,11 @@ try {
     IOFactory::createWriter($phpWord, 'Word2007')->save($tmp);
     $bytes = file_get_contents($tmp);
     @unlink($tmp);
-} catch (Throwable $e) {
+} catch (\Throwable $e) {
     @unlink($tmp);
     http_response_code(500);
     die('Unable to build the document: ' . $e->getMessage());
 }
-
 send_download(
     $bytes,
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

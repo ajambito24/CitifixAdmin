@@ -3,6 +3,7 @@
         "google/cloud-firestore": "^2.3",
         "phpoffice/phpword": "^1.1",
         "dompdf/dompdf": "^3.1",
-        "twbs/bootstrap-icons": "^1.13"
+        "twbs/bootstrap-icons": "^1.13",
+        "phpoffice/phpspreadsheet": "^5.10"
     }
 }
