@@ -83,6 +83,9 @@ try {
         if (!$doc->exists()) continue;
 
         $data = $doc->data();
+        if (strtolower(trim((string) ($data['status'] ?? 'pending'))) === 'pending' && empty($data['reviewStatus'])) {
+            continue;
+        }
         $ts   = export_timestamp($data['createdAt'] ?? null);
 
         if ($bounds['startTs'] !== null) {

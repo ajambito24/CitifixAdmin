@@ -62,6 +62,11 @@ try {
 
         $data = $document->data();
 
+        // New reports still waiting for the super admin's accept / decline stay out of this list.
+        if (strtolower(trim((string) ($data['status'] ?? 'pending'))) === 'pending' && empty($data['reviewStatus'])) {
+            continue;
+        }
+
         // ---- Format createdAt safely ----
         $createdAtRaw = $data['createdAt'] ?? null;
         $createdAtFormatted = 'Unknown';
@@ -209,6 +214,12 @@ foreach ($reports as $report) {
     ];
 }
 
+// Pending (needs action) rows go on top, newest first; the rest keep newest-first order.
+// usort is stable in PHP 8+, so the existing newest-first order is preserved inside each group.
+usort($rows, function ($a, $b) {
+    return (int) ($b['filter'] === 'pending') <=> (int) ($a['filter'] === 'pending');
+});
+
 $countAll = count($rows);
 $visibleCount = $selectedStatus === 'all' ? $countAll : $statusCounts[$selectedStatus];
 
@@ -222,6 +233,7 @@ $statusTitles = [
 
 /**
  * Renders one set of reports: a table (sm and up) and cards (below sm).
+ * Pending reports are highlighted (amber) so admins can tell they still need action.
  */
 function render_report_rows(array $items, string $emptyText = 'No reports.'): void
 {
@@ -256,7 +268,12 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                 </tr>
             </thead>
             <tbody data-sort-list class="divide-y divide-slate-100">
-            <?php foreach ($items as $row): $report = $row['report']; ?>
+            <?php foreach ($items as $row):
+                $report = $row['report'];
+                $isNew  = ($row['filter'] === 'pending');
+                $hide   = ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus);
+                $style  = ($hide ? 'display:none;' : '');
+            ?>
                 <tr data-id="<?= htmlspecialchars($report['id']) ?>" data-ts="<?= (int) $report['createdAtTs'] ?>" data-status="<?= htmlspecialchars($row['filter']) ?>" data-search="<?= htmlspecialchars(strtolower(implode(' ', [
                         $report['id'],
                         $report['category'],
@@ -267,9 +284,11 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                         $report['barangay'],
                         $report['assignedAdminName'],
                         department_name($db, $report['departmentId'] ?? null),
-                    ]))) ?>" class="report-row transition-colors hover:bg-slate-50"<?= ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus) ? ' style="display:none"' : '' ?>>
+                    ]))) ?>" class="report-row transition-colors <?= $isNew ? 'bg-amber-50 hover:bg-amber-100/70' : 'hover:bg-slate-50' ?>"<?= $style !== '' ? ' style="' . $style . '"' : '' ?>>
                     <td class="px-4 py-3.5 font-mono text-xs text-slate-500 sm:px-6"><?= htmlspecialchars(substr($report['id'], 0, 8)) ?></td>
-                    <td class="px-4 py-3.5"><strong class="text-slate-800"><?= htmlspecialchars($report['category']) ?></strong></td>
+                    <td class="px-4 py-3.5">
+                        <strong class="text-slate-800"><?= htmlspecialchars($report['category']) ?></strong>
+                    </td>
                     <td class="px-4 py-3.5 text-xs text-slate-600"><?= htmlspecialchars(department_name($db, $report['departmentId'] ?? null)) ?></td>
                     <?php if ($IS_SUPER_ADMIN): ?>
                         <td class="px-4 py-3.5 text-xs text-slate-600">
@@ -302,7 +321,12 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
 
     <!-- CARDS (below sm) -->
     <div data-sort-list class="divide-y divide-slate-100 border-t border-slate-100 sm:hidden">
-        <?php foreach ($items as $row): $report = $row['report']; ?>
+        <?php foreach ($items as $row):
+            $report = $row['report'];
+            $isNew  = ($row['filter'] === 'pending');
+            $hide   = ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus);
+            $style  = ($hide ? 'display:none;' : '');
+        ?>
             <div data-id="<?= htmlspecialchars($report['id']) ?>" data-ts="<?= (int) $report['createdAtTs'] ?>" data-status="<?= htmlspecialchars($row['filter']) ?>" data-search="<?= htmlspecialchars(strtolower(implode(' ', [
                     $report['id'],
                     $report['category'],
@@ -313,9 +337,11 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                     $report['barangay'],
                     $report['assignedAdminName'],
                     department_name($db, $report['departmentId'] ?? null),
-                ]))) ?>" class="report-row p-4"<?= ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus) ? ' style="display:none"' : '' ?>>
+                ]))) ?>" class="report-row p-4 <?= $isNew ? 'bg-amber-50' : '' ?>"<?= $style !== '' ? ' style="' . $style . '"' : '' ?>>
                 <div class="flex items-start justify-between gap-3">
-                    <strong class="min-w-0 truncate text-slate-900"><?= htmlspecialchars($report['category']) ?></strong>
+                    <strong class="min-w-0 truncate text-slate-900">
+                        <?= htmlspecialchars($report['category']) ?>
+                    </strong>
                     <span class="inline-block shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize <?= $row['pill'] ?>">
                         <?= htmlspecialchars($report['status']) ?>
                     </span>
@@ -401,7 +427,6 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
             </div>
 
             <div class="flex shrink-0 items-center gap-3">
-                <?php require __DIR__ . '/bell.php'; ?>
                 <div class="hidden text-right leading-tight sm:block">
                     <strong class="block text-sm text-slate-800"><?= htmlspecialchars($ADMIN_NAME) ?></strong>
                     <small class="hidden text-xs text-slate-500 md:block">
@@ -934,7 +959,7 @@ function toggleDateSort() {
     applyDateSort(dateSortDir === "desc" ? "asc" : "desc");
 }
 
-// Opened from the notification bell: reports.php?open=<report id>
+// Opened with reports.php?open=<report id> (kept from the old bell links; harmless if unused)
 (function () {
     const openId = new URLSearchParams(window.location.search).get("open");
     if (!openId) return;
