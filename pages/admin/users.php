@@ -146,7 +146,6 @@ foreach ($users as $user) {
             </div>
 
             <div class="flex shrink-0 items-center gap-3">
-                <?php require __DIR__ . '/bell.php'; ?>
                 <div class="hidden text-right leading-tight sm:block">
                     <strong class="block text-sm text-slate-800"><?= htmlspecialchars($ADMIN_NAME) ?></strong>
                     <small class="hidden text-xs text-slate-500 md:block">

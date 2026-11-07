@@ -105,6 +105,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $postAction === 'save_personnel') {
     $department = trim($_POST['departmentId'] ?? '');
     $isActive   = !empty($_POST['isActive']);
 
+    // New department (created inline from the personnel form)
+    $creatingDept = ($department === '__new__');
+    $newDeptCode  = strtoupper(trim($_POST['newDeptCode'] ?? ''));
+    $newDeptName  = trim($_POST['newDeptName'] ?? '');
+    $newDeptDesc  = trim($_POST['newDeptDescription'] ?? '');
+
     // Validation
     if ($firstName === '' || $surname === '' || $email === '') {
         $formError = 'First name, surname and email are required.';
@@ -112,6 +118,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $postAction === 'save_personnel') {
         $formError = 'Please enter a valid email address.';
     } elseif ($department === '') {
         $formError = 'Please choose a department for this admin.';
+    } elseif ($creatingDept && ($newDeptCode === '' || $newDeptName === '')) {
+        $formError = 'Department code and name are required for the new department.';
+    } elseif ($creatingDept && !preg_match('/^[A-Z0-9]{2,10}$/', $newDeptCode)) {
+        $formError = 'Department code must be 2–10 letters or numbers (no spaces or symbols).';
+    } elseif ($creatingDept && mb_strlen($newDeptName) > 120) {
+        $formError = 'Department name is too long (max 120 characters).';
+    } elseif ($creatingDept && mb_strlen($newDeptDesc) > 200) {
+        $formError = 'Description is too long (max 200 characters).';
     } elseif (!$isEdit && $password === '') {
         $formError = 'Password is required for new personnel.';
     } elseif ($password !== '' && strlen($password) < CF_MIN_PASSWORD) {
@@ -140,35 +154,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $postAction === 'save_personnel') {
 
     // Save
     if ($formError === '') {
+        $createdDeptRef = null;
+
         try {
-            $data = [
-                'fullName'     => $fullName,
-                'email'        => $email,
-                'departmentId' => $department,
-                'isActive'     => $isActive,
-                'updatedAt'    => new \Google\Cloud\Core\Timestamp(new \DateTime()),
-            ];
+            // Create the new department first (rolled back below if the personnel save fails)
+            if ($creatingDept) {
+                $deptRef = $db->collection('departments')->document($newDeptCode);
 
-            if ($password !== '') {
-                $data['password'] = password_hash($password, PASSWORD_DEFAULT);
+                if ($deptRef->snapshot()->exists()) {
+                    $formError = 'A department with code "' . $newDeptCode . '" already exists.';
+                } else {
+                    $deptRef->create([
+                        'name'        => $newDeptName,
+                        'description' => $newDeptDesc,
+                        'createdAt'   => new \Google\Cloud\Core\Timestamp(new \DateTime()),
+                        'createdBy'   => $ADMIN_EMAIL,
+                    ]);
+                    $createdDeptRef = $deptRef;
+                    $department     = $newDeptCode;
+                }
             }
 
-            if ($isEdit) {
-                $db->collection('admins')->document($id)->set($data, ['merge' => true]);
-            } else {
-                $data['createdAt'] = new \Google\Cloud\Core\Timestamp(new \DateTime());
-                $data['createdBy'] = $ADMIN_EMAIL;
-                $db->collection('admins')->add($data);
-            }
+            if ($formError === '') {
+                $data = [
+                    'fullName'     => $fullName,
+                    'email'        => $email,
+                    'departmentId' => $department,
+                    'isActive'     => $isActive,
+                    'updatedAt'    => new \Google\Cloud\Core\Timestamp(new \DateTime()),
+                ];
 
-            $_SESSION['flash'] = [
-                'type' => 'success',
-                'msg'  => $isEdit ? 'Personnel updated.' : 'Personnel created.',
-            ];
-            header('Location: personnel.php');
-            exit;
+                if ($password !== '') {
+                    $data['password'] = password_hash($password, PASSWORD_DEFAULT);
+                }
+
+                if ($isEdit) {
+                    $db->collection('admins')->document($id)->set($data, ['merge' => true]);
+                } else {
+                    $data['createdAt'] = new \Google\Cloud\Core\Timestamp(new \DateTime());
+                    $data['createdBy'] = $ADMIN_EMAIL;
+                    $db->collection('admins')->add($data);
+                }
+
+                if ($creatingDept) {
+                    $flashMsg = $isEdit ? 'Personnel updated and department created.' : 'Personnel and department created.';
+                } else {
+                    $flashMsg = $isEdit ? 'Personnel updated.' : 'Personnel created.';
+                }
+
+                $_SESSION['flash'] = ['type' => 'success', 'msg' => $flashMsg];
+                header('Location: personnel.php');
+                exit;
+            }
 
         } catch (Exception $e) {
+            // Personnel save failed after the department was created: remove the orphan department
+            if ($createdDeptRef !== null) {
+                try { $createdDeptRef->delete(); } catch (Exception $e2) { /* ignore */ }
+            }
             $formError = 'Save failed: ' . $e->getMessage();
         }
     }
@@ -327,6 +370,14 @@ unset($_SESSION['flash']);
 // ---- Design-only helpers (no data logic) ----
 $activePage = 'personnel';
 
+// Re-open the "new department" fields after a failed save
+$newDeptOpen = $_SERVER['REQUEST_METHOD'] === 'POST'
+            && $postAction === 'save_personnel'
+            && ($_POST['departmentId'] ?? '') === '__new__';
+$newDeptCodeVal = $newDeptOpen ? strtoupper(trim($_POST['newDeptCode'] ?? '')) : '';
+$newDeptNameVal = $newDeptOpen ? trim($_POST['newDeptName'] ?? '') : '';
+$newDeptDescVal = $newDeptOpen ? trim($_POST['newDeptDescription'] ?? '') : '';
+
 // The add/edit dialogs open server-side: ?add=1, ?id=..., ?add_dept=1, ?dept=..., or a failed POST.
 $modalOpen = ($_SERVER['REQUEST_METHOD'] === 'POST' && $postAction === 'save_personnel')
           || $id !== ''
@@ -390,7 +441,6 @@ $eyeOff = '<svg class="eye-off hidden h-5 w-5" fill="none" stroke="currentColor"
             </div>
 
             <div class="flex shrink-0 items-center gap-3">
-                <?php require __DIR__ . '/bell.php'; ?>
                 <div class="hidden text-right leading-tight sm:block">
                     <strong class="block text-sm text-slate-800"><?= htmlspecialchars($ADMIN_NAME) ?></strong>
                     <small class="hidden text-xs text-slate-500 md:block">
@@ -695,7 +745,36 @@ $eyeOff = '<svg class="eye-off hidden h-5 w-5" fill="none" stroke="currentColor"
                                     <?= htmlspecialchars($deptName) ?>
                                 </option>
                             <?php endforeach; ?>
+                            <option value="__new__" <?= $newDeptOpen ? 'selected' : '' ?>>+ Create new department…</option>
                         </select>
+                    </div>
+
+                    <!-- New department (shown only when "+ Create new department…" is picked) -->
+                    <div id="new-dept-fields" class="<?= $newDeptOpen ? '' : 'hidden ' ?>space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        <p class="text-xs font-semibold text-slate-500">New Department</p>
+
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold text-slate-500" for="newDeptCode">Department Code</label>
+                            <input type="text" id="newDeptCode" name="newDeptCode" minlength="2" maxlength="10" pattern="[A-Za-z0-9]{2,10}"
+                                   placeholder="e.g. DEPS" style="text-transform: uppercase;"
+                                   class="<?= $inputClass ?> font-mono"
+                                   value="<?= htmlspecialchars($newDeptCodeVal) ?>">
+                            <p class="mt-1 text-[11px] text-slate-400">2–10 letters or numbers. Can't be changed later.</p>
+                        </div>
+
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold text-slate-500" for="newDeptName">Department Name</label>
+                            <input type="text" id="newDeptName" name="newDeptName" maxlength="120" class="<?= $inputClass ?>"
+                                   placeholder="e.g. Department of Environment and Public Service"
+                                   value="<?= htmlspecialchars($newDeptNameVal) ?>">
+                        </div>
+
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold text-slate-500" for="newDeptDescription">Description <span class="font-normal text-slate-400">(optional)</span></label>
+                            <input type="text" id="newDeptDescription" name="newDeptDescription" maxlength="200" class="<?= $inputClass ?>"
+                                   placeholder="e.g. Flooding and Garbage"
+                                   value="<?= htmlspecialchars($newDeptDescVal) ?>">
+                        </div>
                     </div>
 
                     <label class="flex items-center gap-2 text-sm font-medium text-slate-700">
@@ -881,6 +960,28 @@ document.querySelectorAll('[data-toggle-password]').forEach(function (btn) {
     pw.addEventListener('input', check);
     cf.addEventListener('input', check);
     check();
+})();
+
+// ---- "+ Create new department…" toggle ----
+(function () {
+    const sel  = document.getElementById('deptSelect');
+    const box  = document.getElementById('new-dept-fields');
+    const code = document.getElementById('newDeptCode');
+    const name = document.getElementById('newDeptName');
+    if (!sel || !box || !code || !name) return;
+
+    function sync() {
+        const on = sel.value === '__new__';
+        box.classList.toggle('hidden', !on);
+        code.required = on;
+        name.required = on;
+    }
+
+    sel.addEventListener('change', function () {
+        sync();
+        if (sel.value === '__new__') code.focus();
+    });
+    sync();
 })();
 
 // ---- Flash popup: success fades out after ~2s, errors stay until closed ----

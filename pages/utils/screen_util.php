@@ -1,20 +1,5 @@
 <?php
-/**
- * screen_util.php
- * Responsiveness helper for the CitiFix landing pages.
- *
- * Include ONCE as the first thing inside <head> of every landing page.
- * It outputs: meta tags, font, Tailwind (CDN) + config, and fluid sizing helpers.
- *
- * Fluid helpers (scale smoothly from 320px phones to 4K screens):
- *   .su-container    page width + side gutters (safe-area aware)
- *   .su-section      vertical section spacing
- *   .su-hero-title   hero headline size
- *   .su-h2           section heading size
- *   .su-lead         intro paragraph size
- *
- * Extra Tailwind breakpoints: xs (375px) and 3xl (1920px).
- */
+
 ?>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">

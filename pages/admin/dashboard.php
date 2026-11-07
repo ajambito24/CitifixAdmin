@@ -4,8 +4,19 @@ require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../config/firebase.php';
 require_once __DIR__ . '/../../config/department_map.php';
 require_once __DIR__ . '/../utils/icons_util.php';
+
 $reports = [];
-$reviewQueue = []; // new reports waiting for the super admin to accept / decline
+
+/**
+ * Only three statuses exist now. Old "in progress" reports (and anything
+ * unknown) are shown as Pending, no database migration needed.
+ */
+function dash_norm_status($raw): string
+{
+    $s = strtolower(trim((string) ($raw ?? 'pending')));
+    $s = str_replace('_', ' ', $s);
+    return in_array($s, ['pending', 'resolved', 'rejected'], true) ? $s : 'pending';
+}
 
 try {
 
@@ -25,14 +36,7 @@ try {
 
         $data = $document->data();
         $data['_id'] = $document->id();
-
-        // Reports the super admin hasn't accepted / declined yet stay out of every
-        // count and list; they only appear in the review modal.
-        $rawStatus = strtolower(trim((string) ($data['status'] ?? 'pending')));
-        if ($rawStatus === 'pending' && empty($data['reviewStatus'])) {
-            $reviewQueue[] = $data;
-            continue;
-        }
+        $data['status'] = dash_norm_status($data['status'] ?? 'pending');
 
         $reports[] = $data;
     }
@@ -43,18 +47,19 @@ try {
 
 $totalReports = count($reports);
 
-$pending = 0;
-$inProgress = 0;
-$resolved = 0;
-$rejected = 0;
+$pending    = 0;
+$resolved   = 0;
+$rejected   = 0;
+$newReports = 0; // pending and not assigned to any admin yet (super admin only)
 
 foreach ($reports as $report) {
-    $status = strtolower(trim($report['status'] ?? 'pending'));
+    $status = $report['status'];
 
     if ($status === 'pending') {
         $pending++;
-    } elseif ($status === 'in progress' || $status === 'in_progress') {
-        $inProgress++;
+        if (empty($report['assignedAdminId'])) {
+            $newReports++;
+        }
     } elseif ($status === 'resolved') {
         $resolved++;
     } elseif ($status === 'rejected') {
@@ -69,21 +74,6 @@ usort($reports, function ($a, $b) {
     if (is_object($tb) && method_exists($tb, 'get')) $tb = $tb->get();
     return ($tb <=> $ta);
 });
-
-// Group by status: pending is the main list, the rest go in collapsible groups.
-$byStatus = [
-    'pending'     => [],
-    'in progress' => [],
-    'resolved'    => [],
-    'rejected'    => [],
-];
-
-foreach ($reports as $report) {
-    $s = strtolower(trim($report['status'] ?? 'pending'));
-    if ($s === 'in_progress') $s = 'in progress';
-    if (!isset($byStatus[$s])) $s = 'pending';
-    $byStatus[$s][] = $report;
-}
 
 /**
  * ---- Reports Overview (trend) data ----
@@ -161,66 +151,26 @@ foreach ($reports as $report) {
 
 $chartValues = array_values($bucketCounts);
 
-// ---- Review queue (super admin only): newest first, formatted for the modal ----
-$reviewItems = [];
-if ($IS_SUPER_ADMIN) {
-    foreach ($reviewQueue as $r) {
-        $dt   = citifix_report_datetime($r['createdAt'] ?? null);
-        $ts   = 0;
-        $when = 'Unknown';
-        if ($dt !== null) {
-            $dt   = DateTime::createFromInterface($dt)->setTimezone(new DateTimeZone('Asia/Manila'));
-            $ts   = $dt->getTimestamp();
-            $when = $dt->format('M d, Y · g:i A');
-        }
-
-        $addr = array_filter([
-            trim((string) ($r['streetAddress'] ?? '')),
-            trim((string) ($r['barangay'] ?? '')),
-        ], function ($part) {
-            return $part !== '';
-        });
-
-        $desc = preg_replace('/\s+/', ' ', trim((string) ($r['description'] ?? '')));
-        $desc = mb_strimwidth($desc, 0, 260, '…');
-
-        $reviewItems[] = [
-            'id'         => $r['_id'],
-            'category'   => $r['category'] ?? 'Unknown',
-            'reporter'   => $r['userFullName'] ?? 'Unknown User',
-            'department' => department_name($db, $r['departmentId'] ?? null),
-            'when'       => $when,
-            'ts'         => $ts,
-            'desc'       => $desc !== '' ? $desc : 'No description',
-            'address'    => implode(', ', $addr),
-            'image'      => trim((string) ($r['imageUrl'] ?? '')),
-        ];
-    }
-    usort($reviewItems, function ($a, $b) {
-        return $b['ts'] <=> $a['ts'];
-    });
-}
-$needsReview = count($reviewItems);
-
 // ---- Design-only helpers (no data logic) ----
 $activePage = 'dashboard';
 
-// [label, value, icon, tint, link to reports.php, red badge count, opens the review modal?]
-// Total Reports (super admin): badge = reports waiting for review, click opens the review modal.
-$statCards = [
-    ['Total Reports', $totalReports, 'clipboard-data',  'bg-blue-100 text-blue-700',     'reports.php?status=' . urlencode('all'),         $needsReview, $IS_SUPER_ADMIN],
-    ['Pending',       $pending,      'hourglass-split', 'bg-amber-100 text-amber-700',   'reports.php?status=' . urlencode('pending'),     0, false],
-    ['In Progress',   $inProgress,   'tools',           'bg-purple-100 text-purple-700', 'reports.php?status=' . urlencode('in progress'), 0, false],
-    ['Resolved',      $resolved,     'check-circle',    'bg-green-100 text-green-700',   'reports.php?status=' . urlencode('resolved'),    0, false],
-    ['Rejected',      $rejected,     'x-circle',        'bg-red-100 text-red-700',       'reports.php?status=' . urlencode('rejected'),    0, false],
-];
+// [label, value, icon, tint, link]
+// Total -> Reports page, All filter. New -> Reports page, Pending filter, newest first.
+$statCards = [];
+$statCards[] = ['Total Reports', $totalReports, 'clipboard-data', 'bg-blue-100 text-blue-700', 'reports.php?status=all'];
+if ($IS_SUPER_ADMIN) {
+    $statCards[] = ['New Reports', $newReports, 'clipboard-data', 'bg-indigo-100 text-indigo-700', 'reports.php?status=pending&sort=newest'];
+}
+$statCards[] = ['Pending',  $pending,  'hourglass-split', 'bg-amber-100 text-amber-700', 'reports.php?status=pending'];
+$statCards[] = ['Resolved', $resolved, 'check-circle',    'bg-green-100 text-green-700', 'reports.php?status=resolved'];
+$statCards[] = ['Rejected', $rejected, 'x-circle',        'bg-red-100 text-red-700',     'reports.php?status=rejected'];
+
+$gridCols = count($statCards) === 5 ? 'xl:grid-cols-5' : 'xl:grid-cols-4';
 
 $pillMap = [
-    'pending'     => 'bg-amber-100 text-amber-800 border-amber-200',
-    'in progress' => 'bg-blue-100 text-blue-800 border-blue-200',
-    'in_progress' => 'bg-blue-100 text-blue-800 border-blue-200',
-    'resolved'    => 'bg-green-100 text-green-800 border-green-200',
-    'rejected'    => 'bg-red-100 text-red-800 border-red-200',
+    'pending'  => 'bg-amber-100 text-amber-800 border-amber-200',
+    'resolved' => 'bg-green-100 text-green-800 border-green-200',
+    'rejected' => 'bg-red-100 text-red-800 border-red-200',
 ];
 
 /**
@@ -230,7 +180,6 @@ $pillMap = [
 function dash_report_table(array $items, array $pillMap): void
 {
     global $db;
-    $known = ['pending', 'in progress', 'resolved', 'rejected'];
     ?>
     <div class="max-h-[28rem] overflow-auto border-t border-slate-100">
         <table class="w-full min-w-[34rem] text-left text-sm">
@@ -244,12 +193,10 @@ function dash_report_table(array $items, array $pillMap): void
             </thead>
             <tbody id="dash-tbody" class="divide-y divide-slate-100">
             <?php foreach ($items as $report):
-                $status = strtolower(trim($report['status'] ?? 'pending'));
+                $status = $report['status'];
                 $pill   = $pillMap[$status] ?? 'bg-slate-100 text-slate-700 border-slate-200';
-                $filter = $status === 'in_progress' ? 'in progress' : $status;
-                if (!in_array($filter, $known, true)) $filter = 'pending';
             ?>
-                <tr data-status="<?= htmlspecialchars($filter) ?>" class="transition-colors hover:bg-slate-50"<?= $filter !== 'pending' ? ' style="display:none"' : '' ?>>
+                <tr data-status="<?= htmlspecialchars($status) ?>" class="transition-colors hover:bg-slate-50"<?= $status !== 'pending' ? ' style="display:none"' : '' ?>>
                     <td class="px-4 py-3.5 font-mono text-xs text-slate-500 sm:px-6">
                         <?= htmlspecialchars(substr($report['_id'], 0, 8)) ?>
                     </td>
@@ -261,7 +208,7 @@ function dash_report_table(array $items, array $pillMap): void
                     </td>
                     <td class="px-4 py-3.5 sm:px-6">
                         <span class="inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold <?= $pill ?>">
-                            <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $status))) ?>
+                            <?= htmlspecialchars(ucfirst($status)) ?>
                         </span>
                     </td>
                 </tr>
@@ -329,17 +276,10 @@ function dash_report_table(array $items, array $pillMap): void
     <main class="mx-auto w-full max-w-[96rem] px-[var(--su-gutter)] py-6 sm:py-8">
 
         <!-- STAT CARDS (each one links to the Reports page with its filter) -->
-        <section class="grid grid-cols-1 gap-4 xs:grid-cols-2 xl:grid-cols-5 sm:gap-5">
-            <?php foreach ($statCards as [$label, $value, $icon, $tint, $href, $badge, $opensReview]): ?>
+        <section class="grid grid-cols-1 gap-4 xs:grid-cols-2 <?= $gridCols ?> sm:gap-5">
+            <?php foreach ($statCards as [$label, $value, $icon, $tint, $href]): ?>
                 <a href="<?= htmlspecialchars($href) ?>"
-                   <?php if ($opensReview): ?>data-open-review="1"<?php endif; ?>
-                   <?php if ($badge > 0): ?>aria-label="<?= htmlspecialchars($label) ?>, <?= (int) $badge ?> waiting for review"<?php endif; ?>
                    class="relative flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
-                    <?php if ($badge > 0): ?>
-                        <span id="review-badge" class="absolute -right-2 -top-2 flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-red-500 px-1.5 text-xs font-bold leading-none text-white ring-2 ring-white">
-                            <?= $badge > 99 ? '99+' : (int) $badge ?>
-                        </span>
-                    <?php endif; ?>
                     <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl <?= $tint ?>"><?= cf_icon($icon, 'h-6 w-6') ?></span>
                     <div>
                         <p class="text-sm font-medium text-slate-500"><?= $label ?></p>
@@ -476,10 +416,10 @@ function dash_report_table(array $items, array $pillMap): void
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
                             PDF
                         </button>
-                            <button type="submit" name="format" value="xlsx" class="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-brand-700 bg-white px-4 py-2.5 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50">
-                              <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
+                        <button type="submit" name="format" value="xlsx" class="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-brand-700 bg-white px-4 py-2.5 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
                             Excel
-                            </button>
+                        </button>
                     </div>
                 </form>
 
@@ -498,7 +438,6 @@ function dash_report_table(array $items, array $pillMap): void
                 <div class="flex flex-wrap items-center gap-2">
                     <select id="dash-status" aria-label="Report status" onchange="dashFilter(this.value)" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100">
                         <option value="pending" selected>Pending (<?= $pending ?>)</option>
-                        <option value="in progress">In Progress (<?= $inProgress ?>)</option>
                         <option value="resolved">Resolved (<?= $resolved ?>)</option>
                         <option value="rejected">Rejected (<?= $rejected ?>)</option>
                         <option value="all">All (<?= $totalReports ?>)</option>
@@ -520,7 +459,7 @@ function dash_report_table(array $items, array $pillMap): void
 
                 <?php dash_report_table($reports, $pillMap); ?>
 
-                <div id="dash-none" class="<?= empty($byStatus['pending']) ? '' : 'hidden ' ?>border-t border-slate-100 py-14 text-center">
+                <div id="dash-none" class="<?= $pending > 0 ? 'hidden ' : '' ?>border-t border-slate-100 py-14 text-center">
                     <div class="flex justify-center text-slate-300"><?= cf_icon('search', 'h-12 w-12') ?></div>
                     <p class="mt-2 text-sm text-slate-500">No reports with this status.</p>
                 </div>
@@ -528,266 +467,9 @@ function dash_report_table(array $items, array $pillMap): void
             <?php endif; ?>
         </section>
 
-<?php if ($IS_SUPER_ADMIN): ?>
-        <!-- REVIEW MODAL: accept (-> Pending) or decline (-> Rejected) new reports -->
-        <div id="review-modal" class="fixed inset-0 z-[70] hidden items-end justify-center bg-slate-900/60 sm:items-center sm:p-4" onclick="if (event.target === this) closeReviewModal()">
-            <div class="flex max-h-[90dvh] w-full flex-col rounded-t-2xl bg-white shadow-2xl sm:max-w-2xl sm:rounded-2xl">
-                <div class="flex shrink-0 items-center justify-between border-b border-slate-200 px-5 py-4">
-                    <div>
-                        <h3 class="text-lg font-bold text-slate-900">Review New Reports</h3>
-                        <p class="text-xs text-slate-500">Accept to move a report to Pending, or decline to mark it Rejected. <span id="review-count" class="font-semibold text-slate-700"><?= $needsReview ?> waiting</span></p>
-                    </div>
-                    <button type="button" onclick="closeReviewModal()" class="flex h-9 w-9 items-center justify-center rounded-lg text-2xl leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close">×</button>
-                </div>
-
-                <div id="review-list" class="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto">
-                    <?php foreach ($reviewItems as $item): ?>
-                        <div class="review-item px-5 py-4" data-id="<?= htmlspecialchars($item['id']) ?>">
-                            <div class="flex items-start justify-between gap-3">
-                                <div class="min-w-0">
-                                    <strong class="block text-slate-900"><?= htmlspecialchars($item['category']) ?></strong>
-                                    <p class="text-xs text-slate-500"><?= htmlspecialchars($item['reporter']) ?> &middot; <?= htmlspecialchars($item['department']) ?></p>
-                                </div>
-                                <span class="shrink-0 text-xs text-slate-500"><?= htmlspecialchars($item['when']) ?></span>
-                            </div>
-                            <?php if ($item['image'] !== ''): ?>
-                                <img src="<?= htmlspecialchars($item['image']) ?>" alt="Report photo" loading="lazy"
-                                     class="mt-3 max-h-56 w-full cursor-pointer rounded-xl border border-slate-200 bg-slate-50 object-cover"
-                                     onclick="window.open(this.src, '_blank')">
-                            <?php endif; ?>
-                            <p class="mt-2 whitespace-pre-wrap text-sm text-slate-700"><?= htmlspecialchars($item['desc']) ?></p>
-                            <?php if ($item['address'] !== ''): ?>
-                                <p class="mt-1 text-xs text-slate-500"><?= htmlspecialchars($item['address']) ?></p>
-                            <?php endif; ?>
-                            <div class="mt-3 flex gap-2">
-                                <button type="button" data-review="decline" class="flex-1 rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50">Decline</button>
-                                <button type="button" data-review="accept" class="flex-1 rounded-lg bg-green-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-green-700 disabled:opacity-50">Accept</button>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-
-                    <div id="review-empty" class="<?= $needsReview > 0 ? 'hidden ' : '' ?>py-14 text-center">
-                        <div class="flex justify-center text-slate-300"><?= cf_icon('check-circle', 'h-12 w-12') ?></div>
-                        <p class="mt-2 text-sm text-slate-500">No reports waiting for review.</p>
-                    </div>
-                </div>
-
-                <div class="flex shrink-0 items-center justify-end rounded-b-2xl border-t border-slate-200 bg-slate-50 px-5 pt-3" style="padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));">
-                    <button type="button" onclick="closeReviewModal()" class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100">Close</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- CONFIRM POPUP (accept / decline) -->
-        <div id="review-confirm" class="fixed inset-0 z-[80] hidden items-center justify-center bg-slate-900/40 p-4">
-            <div class="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-2xl">
-                <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-100 text-amber-600">
-                    <svg class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
-                </div>
-                <h4 id="review-confirm-title" class="mt-4 text-base font-bold text-slate-900"></h4>
-                <p id="review-confirm-text" class="mt-1 text-sm text-slate-500"></p>
-                <div class="mt-5 flex gap-2">
-                    <button type="button" id="review-confirm-no" class="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100">Cancel</button>
-                    <button type="button" id="review-confirm-yes" class="flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors disabled:opacity-50"></button>
-                </div>
-            </div>
-        </div>
-
-        <!-- RESULT POPUP (success auto-hides, errors stay until closed) -->
-        <div id="review-result" role="alert" aria-live="assertive" class="fixed inset-0 z-[90] hidden items-center justify-center bg-slate-900/40 p-4">
-            <div class="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-2xl">
-                <div id="review-result-icon" class="mx-auto flex h-14 w-14 items-center justify-center rounded-full"></div>
-                <p id="review-result-msg" class="mt-4 text-base font-semibold text-slate-900"></p>
-                <button type="button" id="review-result-close" class="mt-5 hidden w-full rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-slate-800">Close</button>
-            </div>
-        </div>
-
-        <script>
-        (function () {
-            const modal   = document.getElementById("review-modal");
-            const card    = document.querySelector("[data-open-review]");
-            const list    = document.getElementById("review-list");
-            const countEl = document.getElementById("review-count");
-            const empty   = document.getElementById("review-empty");
-
-            const confirmBox   = document.getElementById("review-confirm");
-            const confirmTitle = document.getElementById("review-confirm-title");
-            const confirmText  = document.getElementById("review-confirm-text");
-            const confirmYes   = document.getElementById("review-confirm-yes");
-            const confirmNo    = document.getElementById("review-confirm-no");
-
-            const resultBox   = document.getElementById("review-result");
-            const resultIcon  = document.getElementById("review-result-icon");
-            const resultMsg   = document.getElementById("review-result-msg");
-            const resultClose = document.getElementById("review-result-close");
-
-            const CHECK = '<svg class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>';
-            const CROSS = '<svg class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 6l12 12M18 6L6 18"/></svg>';
-
-            const CONFIRM = {
-                accept: {
-                    title: "Accept this report?",
-                    text: "Are you sure you want to accept it? It will be moved to Pending.",
-                    yes: "Yes, accept",
-                    cls: "bg-green-600 hover:bg-green-700"
-                },
-                decline: {
-                    title: "Decline this report?",
-                    text: "Are you sure you want to decline it? It will be marked as Rejected.",
-                    yes: "Yes, decline",
-                    cls: "bg-red-600 hover:bg-red-700"
-                }
-            };
-
-            let changed   = false;
-            let target    = null;   // { item, action } waiting for confirmation
-            let busy      = false;
-            let hideTimer = null;
-
-            function show(el) { el.classList.remove("hidden"); el.classList.add("flex"); }
-            function hide(el) { el.classList.add("hidden"); el.classList.remove("flex"); }
-
-            function openReviewModal() {
-                show(modal);
-                document.body.style.overflow = "hidden";
-            }
-
-            window.closeReviewModal = function () {
-                if (modal.classList.contains("hidden")) return;
-                hide(modal);
-                document.body.style.overflow = "";
-                // Reload so the stat cards and lists reflect what was accepted / declined.
-                if (changed) window.location.reload();
-            };
-
-            function refreshCount() {
-                const n = list.querySelectorAll(".review-item").length;
-                countEl.textContent = n + " waiting";
-                empty.classList.toggle("hidden", n !== 0);
-
-                const badge = document.getElementById("review-badge");
-                if (badge) {
-                    if (n === 0) badge.classList.add("hidden");
-                    else badge.textContent = n > 99 ? "99+" : String(n);
-                }
-            }
-
-            // ---- confirm popup ----
-            function openConfirm(item, action) {
-                const c = CONFIRM[action];
-                target = { item: item, action: action };
-                confirmTitle.textContent = c.title;
-                confirmText.textContent  = c.text;
-                confirmYes.textContent   = c.yes;
-                confirmYes.className     = "flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors disabled:opacity-50 " + c.cls;
-                confirmYes.disabled = false;
-                confirmNo.disabled  = false;
-                show(confirmBox);
-            }
-
-            function closeConfirm() {
-                if (busy) return;
-                hide(confirmBox);
-                target = null;
-            }
-
-            // ---- result popup ----
-            function closeResult() {
-                if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-                hide(resultBox);
-            }
-
-            function showResult(type, message) {
-                if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-
-                const ok = type !== "error";
-                resultIcon.className = "mx-auto flex h-14 w-14 items-center justify-center rounded-full " +
-                    (type === "accept" ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600");
-                resultIcon.innerHTML = type === "accept" ? CHECK : CROSS;
-                resultMsg.textContent = message;
-                resultClose.classList.toggle("hidden", ok);
-                show(resultBox);
-
-                if (ok) hideTimer = setTimeout(closeResult, 2000);
-            }
-
-            async function submitReview() {
-                if (!target || busy) return;
-                busy = true;
-                confirmYes.disabled = true;
-                confirmNo.disabled  = true;
-
-                const item   = target.item;
-                const action = target.action;
-
-                try {
-                    const fd = new FormData();
-                    fd.append("report_id", item.dataset.id);
-                    fd.append("action", action);
-
-                    const res = await fetch("review_report.php", {
-                        method: "POST",
-                        body: fd,
-                        credentials: "same-origin",
-                        headers: { "Accept": "application/json" }
-                    });
-                    const data = await res.json();
-
-                    if (!data || data.ok !== true) {
-                        throw new Error((data && data.msg) || "Something went wrong.");
-                    }
-
-                    item.remove();
-                    changed = true;
-                    refreshCount();
-
-                    busy = false;
-                    closeConfirm();
-                    showResult(action, action === "accept"
-                        ? "Report accepted successfully."
-                        : "Report has been rejected.");
-                } catch (err) {
-                    busy = false;
-                    closeConfirm();
-                    showResult("error", err.message || "Something went wrong. Please try again.");
-                }
-            }
-
-            if (card) {
-                card.addEventListener("click", function (e) {
-                    e.preventDefault();
-                    openReviewModal();
-                });
-            }
-
-            list.addEventListener("click", function (e) {
-                const btn = e.target.closest("[data-review]");
-                if (!btn) return;
-                openConfirm(btn.closest(".review-item"), btn.dataset.review);
-            });
-
-            confirmYes.addEventListener("click", submitReview);
-            confirmNo.addEventListener("click", closeConfirm);
-            resultClose.addEventListener("click", closeResult);
-
-            confirmBox.addEventListener("click", function (e) { if (e.target === confirmBox) closeConfirm(); });
-            resultBox.addEventListener("click", function (e) { if (e.target === resultBox) closeResult(); });
-
-            // Escape closes the top-most popup first
-            document.addEventListener("keydown", function (e) {
-                if (e.key !== "Escape") return;
-                if (!resultBox.classList.contains("hidden")) { closeResult(); return; }
-                if (!confirmBox.classList.contains("hidden")) { closeConfirm(); return; }
-                window.closeReviewModal();
-            });
-        })();
-        </script>
-        <?php endif; ?>
-
         <script>
         const DASH_TITLES = {
             "pending": "Pending Reports",
-            "in progress": "In Progress Reports",
             "resolved": "Resolved Reports",
             "rejected": "Rejected Reports",
             "all": "All Reports"

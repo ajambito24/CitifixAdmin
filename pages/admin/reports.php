@@ -43,6 +43,17 @@ function citifix_parse_firebase_date($value): ?\DateTime
     return null;
 }
 
+/**
+ * Only three statuses exist: pending, resolved, rejected.
+ * Old "in progress" reports (and anything unknown) are shown as Pending.
+ */
+function citifix_norm_status($raw): string
+{
+    $s = strtolower(trim((string) ($raw ?? 'pending')));
+    $s = str_replace('_', ' ', $s);
+    return in_array($s, ['pending', 'resolved', 'rejected'], true) ? $s : 'pending';
+}
+
 $reports = [];
 $error = '';
 
@@ -62,11 +73,6 @@ try {
 
         $data = $document->data();
 
-        // New reports still waiting for the super admin's accept / decline stay out of this list.
-        if (strtolower(trim((string) ($data['status'] ?? 'pending'))) === 'pending' && empty($data['reviewStatus'])) {
-            continue;
-        }
-
         // ---- Format createdAt safely ----
         $createdAtRaw = $data['createdAt'] ?? null;
         $createdAtFormatted = 'Unknown';
@@ -76,13 +82,16 @@ try {
             $createdAtFormatted = $dt->format('M d, Y · g:i A');
         }
 
-        // ---- Format statusHistory ----
+        // ---- Format statusHistory (old "in progress" entries are skipped) ----
         $historyRaw = $data['statusHistory'] ?? [];
         $statusHistory = [];
 
         if (is_array($historyRaw)) {
             foreach ($historyRaw as $entry) {
-                $entryStatus = strtolower($entry['status'] ?? '');
+                $entryStatus = strtolower(str_replace('_', ' ', (string) ($entry['status'] ?? '')));
+                if ($entryStatus === 'in progress') {
+                    continue;
+                }
                 $entryAt = $entry['at'] ?? null;
                 $entryAtFormatted = '';
 
@@ -102,7 +111,7 @@ try {
             'id'                 => $document->id(),
             'category'           => $data['category']     ?? 'Unknown',
             'description'        => $data['description']  ?? 'No description',
-            'status'             => $data['status']       ?? 'pending',
+            'status'             => citifix_norm_status($data['status'] ?? 'pending'),
             'streetAddress'      => $data['streetAddress'] ?? '',
             'barangay'           => $data['barangay']      ?? '',
             'latitude'           => $data['latitude']     ?? null,
@@ -110,6 +119,7 @@ try {
             'userFullName'       => $data['userFullName'] ?? 'Unknown User',
             'userEmail'          => $data['userEmail']    ?? '',
             'imageUrl'           => $data['imageUrl']     ?? '',
+            'resolutionImageUrl' => $data['resolutionImageUrl'] ?? '',
             'adminNotes'         => $data['adminNotes']   ?? '',
             'departmentId'       => $data['departmentId'] ?? null,
             'departmentName'     => department_name($db, $data['departmentId'] ?? null),
@@ -144,6 +154,15 @@ if ($bounds['startTs'] !== null) {
     }));
 }
 
+// ---- Date sort (?sort=newest|oldest, default newest) ----
+$sort = strtolower(trim($_GET['sort'] ?? 'newest'));
+if (!in_array($sort, ['newest', 'oldest'], true)) {
+    $sort = 'newest';
+}
+if ($sort === 'oldest') {
+    $reports = array_reverse($reports);
+}
+
 // ---- Active admins for the "Assigned To" dropdown (super admin only) ----
 $adminOptions = [];
 if ($IS_SUPER_ADMIN) {
@@ -173,49 +192,43 @@ unset($_SESSION['flash']);
 $activePage = 'reports';
 
 $statusClasses = [
-    'pending'     => 'bg-amber-100 text-amber-800 border-amber-200',
-    'in progress' => 'bg-blue-100 text-blue-800 border-blue-200',
-    'in_progress' => 'bg-blue-100 text-blue-800 border-blue-200',
-    'resolved'    => 'bg-green-100 text-green-800 border-green-200',
-    'rejected'    => 'bg-red-100 text-red-800 border-red-200',
+    'pending'  => 'bg-amber-100 text-amber-800 border-amber-200',
+    'resolved' => 'bg-green-100 text-green-800 border-green-200',
+    'rejected' => 'bg-red-100 text-red-800 border-red-200',
 ];
 
 // Status filter (default: pending). Filtering happens client-side; this only sets the initial state.
 $statusOptions = [
-    'pending'     => 'Pending',
-    'in progress' => 'In Progress',
-    'resolved'    => 'Resolved',
-    'rejected'    => 'Rejected',
-    'all'         => 'All',
+    'pending'  => 'Pending',
+    'resolved' => 'Resolved',
+    'rejected' => 'Rejected',
+    'all'      => 'All',
 ];
 
 $selectedStatus = strtolower(trim($_GET['status'] ?? 'pending'));
-if ($selectedStatus === 'in_progress') $selectedStatus = 'in progress';
+$selectedStatus = str_replace('_', ' ', $selectedStatus);
+if ($selectedStatus === 'in progress') $selectedStatus = 'pending';
 if (!array_key_exists($selectedStatus, $statusOptions)) {
     $selectedStatus = 'pending';
 }
 
 $rows = [];
-$statusCounts = ['pending' => 0, 'in progress' => 0, 'resolved' => 0, 'rejected' => 0];
+$statusCounts = ['pending' => 0, 'resolved' => 0, 'rejected' => 0];
 
 foreach ($reports as $report) {
-    $status = strtolower($report['status']);
-    $filter = ($status === 'in_progress') ? 'in progress' : $status;
-    if (!array_key_exists($filter, $statusCounts)) {
-        $filter = 'pending';
-    }
-    $statusCounts[$filter]++;
+    $status = $report['status'];
+    $statusCounts[$status]++;
 
     $rows[] = [
         'report' => $report,
         'pill'   => $statusClasses[$status] ?? 'bg-slate-100 text-slate-700 border-slate-200',
-        'filter' => $filter,
+        'filter' => $status,
         'json'   => htmlspecialchars(json_encode($report), ENT_QUOTES, 'UTF-8'),
     ];
 }
 
-// Pending (needs action) rows go on top, newest first; the rest keep newest-first order.
-// usort is stable in PHP 8+, so the existing newest-first order is preserved inside each group.
+// Pending (needs action) rows go on top, in the chosen date order.
+// usort is stable in PHP 8+, so the date order is preserved inside each group.
 usort($rows, function ($a, $b) {
     return (int) ($b['filter'] === 'pending') <=> (int) ($a['filter'] === 'pending');
 });
@@ -224,11 +237,10 @@ $countAll = count($rows);
 $visibleCount = $selectedStatus === 'all' ? $countAll : $statusCounts[$selectedStatus];
 
 $statusTitles = [
-    'pending'     => 'Pending Reports',
-    'in progress' => 'In Progress Reports',
-    'resolved'    => 'Resolved Reports',
-    'rejected'    => 'Rejected Reports',
-    'all'         => 'All Reports',
+    'pending'  => 'Pending Reports',
+    'resolved' => 'Resolved Reports',
+    'rejected' => 'Rejected Reports',
+    'all'      => 'All Reports',
 ];
 
 /**
@@ -271,6 +283,7 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
             <?php foreach ($items as $row):
                 $report = $row['report'];
                 $isNew  = ($row['filter'] === 'pending');
+                $closed = in_array($row['filter'], ['resolved', 'rejected'], true);
                 $hide   = ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus);
                 $style  = ($hide ? 'display:none;' : '');
             ?>
@@ -307,7 +320,7 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                         </span>
                     </td>
                     <td class="px-4 py-3.5 text-right sm:px-6">
-                        <?php if (can_edit_reports()): ?>
+                        <?php if (can_edit_reports() && (!$closed || $IS_SUPER_ADMIN)): ?>
                             <button type="button" onclick='openReportModal(<?= $row['json'] ?>)' class="inline-flex items-center rounded-lg bg-brand-700 px-3.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-brand-800">Edit</button>
                         <?php else: ?>
                             <button type="button" onclick='openReportModal(<?= $row['json'] ?>)' class="inline-flex items-center rounded-lg bg-slate-100 px-3.5 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200">View</button>
@@ -324,6 +337,7 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
         <?php foreach ($items as $row):
             $report = $row['report'];
             $isNew  = ($row['filter'] === 'pending');
+            $closed = in_array($row['filter'], ['resolved', 'rejected'], true);
             $hide   = ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus);
             $style  = ($hide ? 'display:none;' : '');
         ?>
@@ -364,7 +378,7 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                     <?= htmlspecialchars($report['createdAtFormatted']) ?>
                     &middot; <span class="font-mono"><?= htmlspecialchars(substr($report['id'], 0, 8)) ?></span>
                 </p>
-                <?php if (can_edit_reports()): ?>
+                <?php if (can_edit_reports() && (!$closed || $IS_SUPER_ADMIN)): ?>
                     <button type="button" onclick='openReportModal(<?= $row['json'] ?>)' class="mt-3 w-full rounded-lg bg-brand-700 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-800">Edit</button>
                 <?php else: ?>
                     <button type="button" onclick='openReportModal(<?= $row['json'] ?>)' class="mt-3 w-full rounded-lg bg-slate-100 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-200">View</button>
@@ -478,7 +492,7 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
             </div>
         <?php endif; ?>
 
-        <!-- PENDING REPORTS (main list) -->
+        <!-- REPORTS (main list) -->
         <section class="rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div class="flex flex-wrap items-center justify-between gap-3 p-4 sm:p-6">
                 <div>
@@ -524,9 +538,9 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                                 PDF (.pdf)
                             </a>
                             <a id="export-xlsx" role="menuitem" href="export_reports.php?range=<?= urlencode($selectedRange) ?>&amp;format=xlsx&amp;status=all" class="flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
-                               <span class="inline-flex h-6 w-6 items-center justify-center rounded bg-green-100 text-[10px] font-bold text-green-700">X</span>
-                                 Excel (.xlsx)
-                                </a>
+                                <span class="inline-flex h-6 w-6 items-center justify-center rounded bg-green-100 text-[10px] font-bold text-green-700">X</span>
+                                Excel (.xlsx)
+                            </a>
                         </div>
                     </div>
 
@@ -564,11 +578,11 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
         <div class="flex shrink-0 items-center justify-between border-b border-slate-200 px-5 py-4">
             <div>
                 <h3 class="text-lg font-bold text-slate-900">Report Details</h3>
-                <p class="text-xs text-slate-500">Update status and add admin notes.</p>
+                <p id="modal-subtitle" class="text-xs text-slate-500">Update status and add admin notes.</p>
             </div>
             <button type="button" onclick="closeReportModal()" class="flex h-9 w-9 items-center justify-center rounded-lg text-2xl leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close">×</button>
         </div>
-        <form method="POST" action="update_status.php" class="flex min-h-0 flex-1 flex-col" id="report-form">
+        <form method="POST" action="update_status.php" enctype="multipart/form-data" class="flex min-h-0 flex-1 flex-col" id="report-form">
             <input type="hidden" name="report_id" id="modal-report-id">
             <input type="hidden" name="status" id="modal-status-hidden">
             <div class="modal-body min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -612,7 +626,7 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                     <label class="mb-1 block text-xs font-semibold text-slate-500">Assigned To</label>
                     <div class="relative" id="assign-dd">
                         <input type="hidden" name="assigned_admin_id" id="modal-assigned" value="">
-                        <button type="button" id="assign-btn" aria-haspopup="listbox" class="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-left outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100">
+                        <button type="button" id="assign-btn" aria-haspopup="listbox" class="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-left outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:cursor-not-allowed disabled:bg-slate-50">
                             <span id="assign-label" class="min-w-0 flex-1"></span>
                             <svg class="h-4 w-4 shrink-0 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
                         </button>
@@ -639,17 +653,33 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                 <?php endif; ?>
                 <div class="mt-4">
                     <label class="mb-1 block text-xs font-semibold text-slate-500">Status</label>
-                    <select id="modal-status" onchange="document.getElementById('modal-status-hidden').value = this.value" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100">
-                        <option value="pending">Pending</option>
-                        <option value="in progress">In Progress</option>
-                        <option value="resolved">Resolved</option>
-                        <option value="rejected">Rejected</option>
-                    </select>
+                    <!-- Options are built by refreshStatusUI() depending on role, assignment and report status -->
+                    <select id="modal-status" onchange="document.getElementById('modal-status-hidden').value = this.value; syncResolutionUI();" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"></select>
+                    <p id="modal-status-hint" class="mt-1 text-xs text-slate-500"></p>
                 </div>
+
+                <!-- Resolution photo upload (assigned admin, only when choosing Resolved) -->
+                <div id="modal-resolution-wrap" class="mt-4 hidden">
+                    <label class="mb-1 block text-xs font-semibold text-slate-500">Resolution Photo <span class="font-normal text-red-500">(required)</span></label>
+                    <input type="file" name="resolution_image" id="modal-resolution-input" accept="image/jpeg,image/png,image/webp" class="block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-brand-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-brand-700 hover:file:bg-brand-100">
+                    <img id="modal-resolution-preview" src="" alt="Resolution photo preview" title="Click to enlarge" class="mt-3 hidden max-h-56 w-full cursor-pointer rounded-xl border border-slate-200 object-cover" onclick="openImageLightbox(this.src)">
+                    <p class="mt-1 text-xs text-slate-400">Shown to the resident in the app. JPG, PNG or WebP, up to 5 MB. Click the preview to enlarge it.</p>
+                </div>
+
+                <!-- Existing resolution photo (resolved reports, view only) -->
+                <div id="modal-resolution-view" class="mt-4 hidden">
+                    <label class="mb-1 block text-xs font-semibold text-slate-500">Resolution Photo</label>
+                    <img id="modal-resolution-img" src="" alt="Resolution photo" title="Click to enlarge" class="max-h-64 w-full cursor-pointer rounded-xl border border-slate-200 object-cover" onclick="openImageLightbox(this.src)">
+                    <p class="mt-1 text-xs text-slate-400">Click image to enlarge</p>
+                </div>
+
                 <div class="mt-4">
                     <label class="mb-1 block text-xs font-semibold text-slate-500">Admin Notes <span class="font-normal text-slate-400">(optional)</span></label>
-                    <textarea id="modal-notes" name="admin_notes" rows="3" placeholder="Add internal notes about this report…" class="w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"></textarea>
+                    <textarea id="modal-notes" name="admin_notes" rows="3" placeholder="Add internal notes about this report…" class="w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-50 disabled:text-slate-500"></textarea>
                 </div>
+
+                <div id="modal-form-error" role="alert" class="mt-4 hidden rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"></div>
+
                 <div id="modal-history-wrap" class="mt-5 border-t border-slate-200 pt-4">
                     <label class="mb-2 block text-xs font-semibold text-slate-500">Status History</label>
                     <div id="modal-history"></div>
@@ -658,27 +688,193 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
             <div class="flex shrink-0 items-center justify-end gap-2 rounded-b-2xl border-t border-slate-200 bg-slate-50 px-5 pt-3" style="padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));">
                 <button type="button" onclick="closeReportModal()" class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100">Close</button>
                 <?php if (can_edit_reports()): ?>
-                    <button type="submit" class="rounded-lg bg-brand-700 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-800">Save Changes</button>
+                    <button type="submit" id="modal-save" class="rounded-lg bg-brand-700 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-800">Save Changes</button>
                 <?php endif; ?>
             </div>
         </form>
     </div>
 </div>
 
+<!-- IMAGE LIGHTBOX: in-page full-size photo, sits above the report modal -->
+<div id="image-lightbox" role="dialog" aria-modal="true" aria-label="Photo preview" class="fixed inset-0 z-[95] hidden items-center justify-center bg-slate-900/90 p-4" onclick="if (event.target === this) closeImageLightbox()">
+    <button type="button" onclick="closeImageLightbox()" aria-label="Close photo" class="absolute right-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-2xl leading-none text-white transition-colors hover:bg-white/30" style="top: max(1rem, env(safe-area-inset-top, 0px));">×</button>
+    <img id="image-lightbox-img" src="" alt="Full size photo" class="max-h-full max-w-full rounded-lg object-contain shadow-2xl">
+</div>
+
 <script>
+const IS_SUPER_ADMIN = <?= json_encode((bool) $IS_SUPER_ADMIN) ?>;
+const MAX_RESOLUTION_BYTES = 5 * 1024 * 1024;
+const RESOLUTION_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
 const STATUS_META = {
-    "pending":     { color: "#f59e0b", label: "Pending" },
-    "in progress": { color: "#3b82f6", label: "In Progress" },
-    "resolved":    { color: "#22c55e", label: "Resolved" },
-    "rejected":    { color: "#ef4444", label: "Rejected" }
+    "pending":  { color: "#f59e0b", label: "Pending" },
+    "resolved": { color: "#22c55e", label: "Resolved" },
+    "rejected": { color: "#ef4444", label: "Rejected" }
 };
 
+let currentReport = null;
+
+// ---- In-page image lightbox ----
+function openImageLightbox(src) {
+    if (!src) return;
+    const box = document.getElementById("image-lightbox");
+    document.getElementById("image-lightbox-img").src = src;
+    box.classList.remove("hidden");
+    box.classList.add("flex");
+}
+
+function closeImageLightbox() {
+    const box = document.getElementById("image-lightbox");
+    if (box.classList.contains("hidden")) return;
+    box.classList.add("hidden");
+    box.classList.remove("flex");
+    document.getElementById("image-lightbox-img").removeAttribute("src");
+}
+
+// Escape closes the lightbox first and leaves the report modal open.
+document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape") return;
+    const box = document.getElementById("image-lightbox");
+    if (box && !box.classList.contains("hidden")) {
+        closeImageLightbox();
+        event.stopImmediatePropagation();
+    }
+}, true);
+
+// Old "in progress" (and anything unknown) counts as pending.
+function normStatus(raw) {
+    const s = String(raw || "pending").toLowerCase().replace(/_/g, " ").trim();
+    return STATUS_META[s] ? s : "pending";
+}
+
+function isClosedStatus(s) {
+    return s === "resolved" || s === "rejected";
+}
+
 function getStatusMeta(status) {
-    const s = String(status || "pending").toLowerCase();
-    return STATUS_META[s] || { color: "#94a3b8", label: s };
+    return STATUS_META[normStatus(status)];
+}
+
+function showFormError(msg) {
+    const box = document.getElementById("modal-form-error");
+    if (!msg) {
+        box.classList.add("hidden");
+        box.textContent = "";
+        return;
+    }
+    box.textContent = msg;
+    box.classList.remove("hidden");
+}
+
+function clearResolutionInput() {
+    const input = document.getElementById("modal-resolution-input");
+    const preview = document.getElementById("modal-resolution-preview");
+    input.value = "";
+    preview.removeAttribute("src");
+    preview.classList.add("hidden");
+}
+
+// Show the photo upload only for the assigned admin choosing "Resolved".
+function syncResolutionUI() {
+    const wrap = document.getElementById("modal-resolution-wrap");
+    const status = document.getElementById("modal-status-hidden").value;
+    const closed = currentReport ? isClosedStatus(normStatus(currentReport.status)) : false;
+    const show = !IS_SUPER_ADMIN && !closed && status === "resolved";
+
+    wrap.classList.toggle("hidden", !show);
+    if (!show) clearResolutionInput();
+    showFormError("");
+}
+
+// Builds the status dropdown for the current role / assignment / report status.
+function refreshStatusUI() {
+    if (!currentReport) return;
+
+    const sel = document.getElementById("modal-status");
+    const hidden = document.getElementById("modal-status-hidden");
+    const hint = document.getElementById("modal-status-hint");
+    const saveBtn = document.getElementById("modal-save");
+    const notes = document.getElementById("modal-notes");
+    const assignBtn = document.getElementById("assign-btn");
+
+    const status = normStatus(currentReport.status);
+    const closed = isClosedStatus(status);
+    const previous = hidden.value;
+
+    function add(value, label) {
+        const o = document.createElement("option");
+        o.value = value;
+        o.textContent = label;
+        sel.appendChild(o);
+    }
+
+    sel.innerHTML = "";
+    sel.disabled = false;
+
+    // Closed reports are locked for admins; the super admin can still edit them or reopen them.
+    const locked = closed && !IS_SUPER_ADMIN;
+
+    if (locked) {
+        add(status, STATUS_META[status].label);
+        sel.value = status;
+        sel.disabled = true;
+        hidden.value = status;
+        hint.textContent = "This report is closed and can no longer be edited.";
+    } else if (closed && IS_SUPER_ADMIN) {
+        const selectedAssigned = document.getElementById("modal-assigned").value;
+        const originalAssigned = currentReport.assignedAdminId || "";
+        const reassigning = selectedAssigned !== "" && selectedAssigned !== originalAssigned;
+
+        add(status, STATUS_META[status].label + " (no change)");
+        add("pending", "Pending (reopen)");
+
+        if (reassigning) {
+            sel.value = "pending";
+            sel.disabled = true;
+            hint.textContent = "Assigning a closed report to an admin reopens it as Pending.";
+        } else {
+            sel.value = (previous === "pending") ? "pending" : status;
+            hint.textContent = "Closed report. Set it to Pending to reopen it.";
+        }
+        hidden.value = sel.value;
+    } else if (IS_SUPER_ADMIN) {
+        const assigned = document.getElementById("modal-assigned").value !== "";
+
+        if (assigned) {
+            add("pending", "Pending");
+            sel.value = "pending";
+            sel.disabled = true;
+            hidden.value = "pending";
+            hint.textContent = "Assigned reports stay Pending until the admin resolves or rejects them.";
+        } else {
+            add("pending", "Pending");
+            add("rejected", "Rejected");
+            sel.value = (previous === "rejected") ? "rejected" : "pending";
+            hidden.value = sel.value;
+            hint.textContent = "Not assigned yet: assign it to an admin, or reject it.";
+        }
+    } else {
+        add("", "Select action…");
+        add("resolved", "Resolved");
+        add("rejected", "Rejected");
+        sel.value = (previous === "resolved" || previous === "rejected") ? previous : "";
+        hidden.value = sel.value;
+        hint.textContent = "Choose Resolved (photo required) or Rejected.";
+    }
+
+    notes.disabled = locked;
+    if (assignBtn) assignBtn.disabled = locked;
+    if (saveBtn) saveBtn.classList.toggle("hidden", locked);
+    document.getElementById("modal-subtitle").textContent = locked
+        ? "This report is closed."
+        : (closed ? "Closed report. You can edit it or reopen it." : "Update status and add admin notes.");
+
+    syncResolutionUI();
 }
 
 function openReportModal(report) {
+    currentReport = report;
+
     document.getElementById("modal-report-id").value = report.id;
     document.getElementById("modal-category").textContent = report.category || "—";
     document.getElementById("modal-department").textContent = report.departmentName || "—";
@@ -699,13 +895,26 @@ function openReportModal(report) {
     }
     document.getElementById("modal-coords").textContent = coords;
 
-    const statusSelect = document.getElementById("modal-status");
-    statusSelect.value = (report.status || "pending").toLowerCase().replace("_", " ");
-    document.getElementById("modal-status-hidden").value = statusSelect.value;
     document.getElementById("modal-notes").value = report.adminNotes || "";
 
     // Only rendered for the super admin
     setAssigned(report.assignedAdminId || "", report.assignedAdminName || "");
+
+    // Fresh start for the status controls
+    document.getElementById("modal-status-hidden").value = "";
+    clearResolutionInput();
+    refreshStatusUI();
+
+    // Existing resolution photo (resolved reports)
+    const resView = document.getElementById("modal-resolution-view");
+    const resImg = document.getElementById("modal-resolution-img");
+    if (normStatus(report.status) === "resolved" && report.resolutionImageUrl && String(report.resolutionImageUrl).trim() !== "") {
+        resImg.src = report.resolutionImageUrl;
+        resView.classList.remove("hidden");
+    } else {
+        resImg.removeAttribute("src");
+        resView.classList.add("hidden");
+    }
 
     const imgWrap = document.getElementById("modal-image-wrap");
     const img = document.getElementById("modal-image");
@@ -741,11 +950,58 @@ function openReportModal(report) {
         });
     }
 
+    showFormError("");
+
     const modal = document.getElementById("report-modal");
     modal.classList.remove("hidden");
     modal.classList.add("flex");
     document.body.style.overflow = "hidden";
 }
+
+// ---- Resolution photo: preview + basic checks ----
+(function () {
+    const input = document.getElementById("modal-resolution-input");
+    const preview = document.getElementById("modal-resolution-preview");
+
+    input.addEventListener("change", function () {
+        showFormError("");
+        const file = input.files[0];
+
+        if (!file) {
+            clearResolutionInput();
+            return;
+        }
+        if (RESOLUTION_TYPES.indexOf(file.type) === -1) {
+            clearResolutionInput();
+            showFormError("Only JPG, PNG or WebP images are allowed.");
+            return;
+        }
+        if (file.size > MAX_RESOLUTION_BYTES) {
+            clearResolutionInput();
+            showFormError("Image is too large (max 5 MB).");
+            return;
+        }
+
+        preview.src = URL.createObjectURL(file);
+        preview.classList.remove("hidden");
+    });
+
+    // Block saving until the required pieces are there (the server checks again).
+    document.getElementById("report-form").addEventListener("submit", function (e) {
+        const status = document.getElementById("modal-status-hidden").value;
+
+        if (status === "") {
+            e.preventDefault();
+            showFormError("Please choose Resolved or Rejected.");
+            return;
+        }
+
+        if (!IS_SUPER_ADMIN && status === "resolved" && input.files.length === 0) {
+            e.preventDefault();
+            showFormError("Please attach a resolution photo before marking this report as resolved.");
+        }
+    });
+})();
 
 // ---- "Assigned To" custom dropdown (super admin only) ----
 function renderAssignLabel(name, dept) {
@@ -806,6 +1062,8 @@ function closeAssignList() {
             document.getElementById("modal-assigned").value = opt.dataset.value;
             renderAssignLabel(opt.dataset.name, opt.dataset.dept);
             closeAssignList();
+            // Assigning locks the status to Pending; unassigning allows Reject again.
+            refreshStatusUI();
         });
     });
 
@@ -815,7 +1073,9 @@ function closeAssignList() {
 })();
 
 function closeReportModal() {
+    closeImageLightbox();
     closeAssignList();
+    clearResolutionInput();
     const modal = document.getElementById("report-modal");
     modal.classList.add("hidden");
     modal.classList.remove("flex");
@@ -860,6 +1120,7 @@ function closeFlashPopup() {
 // ---- Status filter + search (client-side) + export links ----
 const EXPORT_RANGE = <?= json_encode($selectedRange) ?>;
 const STATUS_TITLES = <?= json_encode($statusTitles) ?>;
+const SORT_INITIAL = <?= json_encode($sort) ?>;
 
 function updateExportLinks() {
     const statusSel = document.getElementById("status-select");
@@ -930,7 +1191,19 @@ function applyStatusFilter(value) {
 updateExportLinks();
 
 // ---- Date sort (newest first / oldest first) — applies to every list ----
-let dateSortDir = "desc";
+// The page is already rendered in the order from ?sort=; this just keeps the toggle in step.
+let dateSortDir = SORT_INITIAL === "oldest" ? "asc" : "desc";
+
+function syncSortLabels(dir) {
+    const text = dir === "desc" ? "Newest first" : "Oldest first";
+    document.querySelectorAll(".date-sort-label").forEach(function (el) { el.textContent = text; });
+    document.querySelectorAll(".date-sort-icon").forEach(function (el) {
+        el.style.transform = dir === "desc" ? "" : "rotate(180deg)";
+    });
+    document.querySelectorAll(".date-sort-btn").forEach(function (b) {
+        b.title = "Sorted: " + text + " (click to reverse)";
+    });
+}
 
 function applyDateSort(dir) {
     dateSortDir = dir;
@@ -945,19 +1218,14 @@ function applyDateSort(dir) {
         items.forEach(function (el) { container.appendChild(el); });
     });
 
-    const text = dir === "desc" ? "Newest first" : "Oldest first";
-    document.querySelectorAll(".date-sort-label").forEach(function (el) { el.textContent = text; });
-    document.querySelectorAll(".date-sort-icon").forEach(function (el) {
-        el.style.transform = dir === "desc" ? "" : "rotate(180deg)";
-    });
-    document.querySelectorAll(".date-sort-btn").forEach(function (b) {
-        b.title = "Sorted: " + text + " (click to reverse)";
-    });
+    syncSortLabels(dir);
 }
 
 function toggleDateSort() {
     applyDateSort(dateSortDir === "desc" ? "asc" : "desc");
 }
+
+syncSortLabels(dateSortDir);
 
 // Opened with reports.php?open=<report id> (kept from the old bell links; harmless if unused)
 (function () {

@@ -15,7 +15,7 @@ $icons = [
 ];
 
 $groups = [
-    'Overview'   => [['dashboard', 'Home', 'dashboard.php', 'house']],
+    'Overview'   => [['dashboard', 'Dashboard', 'dashboard.php', 'columns-gap']],
     'Operations' => [
         ['reports',      'Reports',      'reports.php',      'file-earmark-text'],
         ['map',          'Map View',     'map.php',          'map'],
@@ -26,7 +26,7 @@ if (!empty($IS_SUPER_ADMIN)) {
     $groups['Administration'] = [
         ['personnel', 'Personnel', 'personnel.php', 'people'],
         ['users',     'Users',     'users.php',     'person'],
-        ['settings',  'Settings',  'settings.php',  'gear'],
+        ['informationsystem', 'Information System', 'informationsystem.php', 'info-circle'],
     ];
 }
 

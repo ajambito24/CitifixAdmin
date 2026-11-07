@@ -10,7 +10,7 @@ if (!$IS_SUPER_ADMIN) {
 }
 
 // ---- Design-only helpers (no data logic) ----
-$activePage = 'settings';
+$activePage = 'informationsystem';
 
 $settingsRows = [
     ['System Name',   'CitiFix Manila'],
@@ -25,7 +25,7 @@ $settingsRows = [
 
 <head>
 <?php require __DIR__ . '/../utils/screen_util.php'; ?>
-<title>CitiFix Settings</title>
+<title>System Information</title>
 </head>
 
 <body class="bg-slate-50 text-slate-700 antialiased">
@@ -50,7 +50,6 @@ $settingsRows = [
             </div>
 
             <div class="flex shrink-0 items-center gap-3">
-                <?php require __DIR__ . '/bell.php'; ?>
                 <div class="hidden text-right leading-tight sm:block">
                     <strong class="block text-sm text-slate-800"><?= htmlspecialchars($ADMIN_NAME) ?></strong>
                     <small class="hidden text-xs text-slate-500 md:block">
@@ -86,6 +85,12 @@ $settingsRows = [
         </section>
 
     </main>
+
+    <!-- FOOTER -->
+    <footer class="border-t border-slate-200 px-[var(--su-gutter)] py-6 text-left text-xs text-slate-500"
+            style="padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));">
+        &copy; <?= date('Y') ?> CitiFix Manila. All rights reserved.
+    </footer>
 </div>
 
 </body>

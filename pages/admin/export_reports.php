@@ -60,8 +60,8 @@ $bounds     = citifix_range_bounds($range);
 $periodLabel = $bounds['period'];
 
 $statusFilter = strtolower(trim($_GET['status'] ?? 'all'));
-if ($statusFilter === 'in_progress') $statusFilter = 'in progress';
-if (!in_array($statusFilter, ['all', 'pending', 'in progress', 'resolved', 'rejected'], true)) {
+if ($statusFilter === 'in_progress' || $statusFilter === 'in progress') $statusFilter = 'pending';
+if (!in_array($statusFilter, ['all', 'pending', 'resolved', 'rejected'], true)) {
     $statusFilter = 'all';
 }
 
@@ -79,23 +79,21 @@ try {
         $query = $query->where('assignedAdminId', '=', $ADMIN_ID);
     }
 
-    foreach ($query->documents() as $doc) {
-        if (!$doc->exists()) continue;
+foreach ($query->documents() as $doc) {
+    if (!$doc->exists()) continue;
 
-        $data = $doc->data();
-        if (strtolower(trim((string) ($data['status'] ?? 'pending'))) === 'pending' && empty($data['reviewStatus'])) {
-            continue;
-        }
-        $ts   = export_timestamp($data['createdAt'] ?? null);
+    $data = $doc->data();   // <- put this back
+    $ts   = export_timestamp($data['createdAt'] ?? null);
 
-        if ($bounds['startTs'] !== null) {
-            if ($ts === null || $ts < $bounds['startTs'] || $ts > $bounds['endTs']) continue;
-        }
+    if ($bounds['startTs'] !== null) {
+        if ($ts === null || $ts < $bounds['startTs'] || $ts > $bounds['endTs']) continue;
+    }
 
-        $status = strtolower(trim($data['status'] ?? 'pending'));
-        if ($status === 'in_progress') $status = 'in progress';
+    $status = strtolower(trim($data['status'] ?? 'pending'));
+    $status = str_replace('_', ' ', $status);
+    if (!in_array($status, ['pending', 'resolved', 'rejected'], true)) $status = 'pending';
 
-        if ($statusFilter !== 'all' && $status !== $statusFilter) continue;
+    if ($statusFilter !== 'all' && $status !== $statusFilter) continue;
 
         // Street + barangay, same as the details modal in reports.php
         $addressParts = array_filter([
@@ -125,7 +123,7 @@ try {
 usort($rows, fn($a, $b) => $b['ts'] <=> $a['ts']);
 
 $total      = count($rows);
-$counts     = ['pending' => 0, 'in progress' => 0, 'resolved' => 0, 'rejected' => 0];
+$counts = ['pending' => 0, 'resolved' => 0, 'rejected' => 0];
 $categories = [];
 
 foreach ($rows as $r) {
@@ -136,7 +134,6 @@ arsort($categories);
 
 $statusStyle = [
     'pending'     => ['bg' => 'FEF3C7', 'fg' => '92400E', 'label' => 'Pending'],
-    'in progress' => ['bg' => 'DBEAFE', 'fg' => '1E40AF', 'label' => 'In Progress'],
     'resolved'    => ['bg' => 'DCFCE7', 'fg' => '166534', 'label' => 'Resolved'],
     'rejected'    => ['bg' => 'FEE2E2', 'fg' => '991B1B', 'label' => 'Rejected'],
 ];
@@ -184,7 +181,6 @@ if ($format === 'pdf') {
     $cardDefs = [
         ['Total Reports', $total,                 '#dbeafe', '#1e3a8a'],
         ['Pending',       $counts['pending'],     '#fef3c7', '#92400e'],
-        ['In Progress',   $counts['in progress'], '#ede9fe', '#5b21b6'],
         ['Resolved',      $counts['resolved'],    '#dcfce7', '#166534'],
         ['Rejected',      $counts['rejected'],    '#fee2e2', '#991b1b'],
     ];
@@ -399,7 +395,6 @@ if ($format === 'xlsx') {
         $xCards = [
             ['Total Reports', $total,                 'DBEAFE', $NAVY],
             ['Pending',       $counts['pending'],     'FEF3C7', '92400E'],
-            ['In Progress',   $counts['in progress'], 'EDE9FE', '5B21B6'],
             ['Resolved',      $counts['resolved'],    'DCFCE7', '166534'],
             ['Rejected',      $counts['rejected'],    'FEE2E2', '991B1B'],
         ];
@@ -569,7 +564,6 @@ $section->addTextBreak(1, ['size' => 6]);
 $cards = [
     ['Total Reports', $total,                  'DBEAFE', $NAVY],
     ['Pending',       $counts['pending'],      'FEF3C7', '92400E'],
-    ['In Progress',   $counts['in progress'],  'EDE9FE', '5B21B6'],
     ['Resolved',      $counts['resolved'],     'DCFCE7', '166534'],
     ['Rejected',      $counts['rejected'],     'FEE2E2', '991B1B'],
 ];

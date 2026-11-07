@@ -134,8 +134,7 @@ $activePage = 'map';
                 </div>
             </div>
 
-            <div class="flex shrink-0 items-center gap-3">
-                <?php require __DIR__ . '/bell.php'; ?>
+            <div class="flex shrink-0 items-center gap-3">          
                 <div class="hidden text-right leading-tight sm:block">
                     <strong class="block text-sm text-slate-800"><?= htmlspecialchars($ADMIN_NAME) ?></strong>
                     <small class="hidden text-xs text-slate-500 md:block">
@@ -163,10 +162,8 @@ $activePage = 'map';
                 </div>
                 <div class="flex shrink-0 items-center gap-2">
                     <select id="map-status-filter" aria-label="Filter reports by status" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100">
-                        <option value="active" selected>Active (Pending &amp; In Progress)</option>
+                        <option value="pending" selected>Pending</option>
                         <option value="all">All</option>
-                        <option value="pending">Pending</option>
-                        <option value="in progress">In Progress</option>
                         <option value="resolved">Resolved</option>
                         <option value="rejected">Rejected</option>
                     </select>
@@ -216,14 +213,12 @@ const SAMPALOC_CENTER = [14.6031, 121.0022];
 
 const STATUS_COLORS = {
     "pending":     "#f59e0b",
-    "in progress": "#3b82f6",
     "resolved":    "#22c55e",
     "rejected":    "#ef4444"
 };
 
 const STATUS_LABELS = {
     "pending":     "Pending",
-    "in progress": "In Progress",
     "resolved":    "Resolved",
     "rejected":    "Rejected"
 };
@@ -362,12 +357,11 @@ legend.addTo(map);
 // ---- Status filter ----
 function matchesFilter(status, filter) {
     if (filter === "all") return true;
-    if (filter === "active") return status === "pending" || status === "in progress";
     return status === filter;
 }
 
 function applyMapFilter(filter) {
-    const counts = { "pending": 0, "in progress": 0, "resolved": 0, "rejected": 0 };
+    const counts = { "pending": 0, "resolved": 0, "rejected": 0 };
     let visible = 0;
 
     map.closePopup();
