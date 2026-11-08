@@ -44,12 +44,19 @@ function citifix_parse_firebase_date($value): ?\DateTime
 }
 
 /**
- * Only three statuses exist: pending, resolved, rejected.
- * Old "in progress" reports (and anything unknown) are shown as Pending.
+ * Four statuses exist: for review, pending, resolved, rejected.
+ * "for review" means no department and no assigned admin yet.
  */
-function citifix_norm_status($raw): string
+function citifix_norm_status(array $data): string
 {
-    $s = strtolower(trim((string) ($raw ?? 'pending')));
+    $hasDept  = !empty($data['departmentId']);
+    $hasAdmin = !empty($data['assignedAdminId']);
+    
+    if (!$hasDept && !$hasAdmin) {
+        return 'for review'; 
+    }
+
+    $s = strtolower(trim((string) ($data['status'] ?? 'pending')));
     $s = str_replace('_', ' ', $s);
     return in_array($s, ['pending', 'resolved', 'rejected'], true) ? $s : 'pending';
 }
@@ -111,7 +118,7 @@ try {
             'id'                 => $document->id(),
             'category'           => $data['category']     ?? 'Unknown',
             'description'        => $data['description']  ?? 'No description',
-            'status'             => citifix_norm_status($data['status'] ?? 'pending'),
+            'status'             => citifix_norm_status($data), // Naka-based na sa buong data array
             'streetAddress'      => $data['streetAddress'] ?? '',
             'barangay'           => $data['barangay']      ?? '',
             'latitude'           => $data['latitude']     ?? null,
@@ -192,28 +199,30 @@ unset($_SESSION['flash']);
 $activePage = 'reports';
 
 $statusClasses = [
-    'pending'  => 'bg-amber-100 text-amber-800 border-amber-200',
-    'resolved' => 'bg-green-100 text-green-800 border-green-200',
-    'rejected' => 'bg-red-100 text-red-800 border-red-200',
+    'for review' => 'bg-indigo-100 text-indigo-800 border-indigo-200',
+    'pending'    => 'bg-amber-100 text-amber-800 border-amber-200',
+    'resolved'   => 'bg-green-100 text-green-800 border-green-200',
+    'rejected'   => 'bg-red-100 text-red-800 border-red-200',
 ];
 
-// Status filter (default: pending). Filtering happens client-side; this only sets the initial state.
+// Status filter (default: for review para sa super admin, pending para sa admins)
 $statusOptions = [
-    'pending'  => 'Pending',
-    'resolved' => 'Resolved',
-    'rejected' => 'Rejected',
-    'all'      => 'All',
+    'for review' => 'For Review',
+    'pending'    => 'Pending',
+    'resolved'   => 'Resolved',
+    'rejected'   => 'Rejected',
+    'all'        => 'All',
 ];
 
-$selectedStatus = strtolower(trim($_GET['status'] ?? 'pending'));
+$selectedStatus = strtolower(trim($_GET['status'] ?? ($IS_SUPER_ADMIN ? 'for review' : 'pending')));
 $selectedStatus = str_replace('_', ' ', $selectedStatus);
 if ($selectedStatus === 'in progress') $selectedStatus = 'pending';
 if (!array_key_exists($selectedStatus, $statusOptions)) {
-    $selectedStatus = 'pending';
+    $selectedStatus = $IS_SUPER_ADMIN ? 'for review' : 'pending';
 }
 
 $rows = [];
-$statusCounts = ['pending' => 0, 'resolved' => 0, 'rejected' => 0];
+$statusCounts = ['for review' => 0, 'pending' => 0, 'resolved' => 0, 'rejected' => 0];
 
 foreach ($reports as $report) {
     $status = $report['status'];
@@ -227,25 +236,27 @@ foreach ($reports as $report) {
     ];
 }
 
-// Pending (needs action) rows go on top, in the chosen date order.
-// usort is stable in PHP 8+, so the date order is preserved inside each group.
+// "For review" at "pending" ang mauuna sa listahan.
 usort($rows, function ($a, $b) {
-    return (int) ($b['filter'] === 'pending') <=> (int) ($a['filter'] === 'pending');
+    $priority = ['for review' => 2, 'pending' => 1];
+    $pa = $priority[$a['filter']] ?? 0;
+    $pb = $priority[$b['filter']] ?? 0;
+    return $pb <=> $pa;
 });
 
 $countAll = count($rows);
 $visibleCount = $selectedStatus === 'all' ? $countAll : $statusCounts[$selectedStatus];
 
 $statusTitles = [
-    'pending'  => 'Pending Reports',
-    'resolved' => 'Resolved Reports',
-    'rejected' => 'Rejected Reports',
-    'all'      => 'All Reports',
+    'for review' => 'For Review Reports',
+    'pending'    => 'Pending Reports',
+    'resolved'   => 'Resolved Reports',
+    'rejected'   => 'Rejected Reports',
+    'all'        => 'All Reports',
 ];
 
 /**
  * Renders one set of reports: a table (sm and up) and cards (below sm).
- * Pending reports are highlighted (amber) so admins can tell they still need action.
  */
 function render_report_rows(array $items, string $emptyText = 'No reports.'): void
 {
@@ -282,10 +293,12 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
             <tbody data-sort-list class="divide-y divide-slate-100">
             <?php foreach ($items as $row):
                 $report = $row['report'];
-                $isNew  = ($row['filter'] === 'pending');
+                $isNew  = ($row['filter'] === 'for review');
+                $isPend = ($row['filter'] === 'pending');
                 $closed = in_array($row['filter'], ['resolved', 'rejected'], true);
                 $hide   = ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus);
                 $style  = ($hide ? 'display:none;' : '');
+                $rowBg  = $isNew ? 'bg-indigo-50 hover:bg-indigo-100/70' : ($isPend ? 'bg-amber-50 hover:bg-amber-100/70' : 'hover:bg-slate-50');
             ?>
                 <tr data-id="<?= htmlspecialchars($report['id']) ?>" data-ts="<?= (int) $report['createdAtTs'] ?>" data-status="<?= htmlspecialchars($row['filter']) ?>" data-search="<?= htmlspecialchars(strtolower(implode(' ', [
                         $report['id'],
@@ -297,7 +310,7 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                         $report['barangay'],
                         $report['assignedAdminName'],
                         department_name($db, $report['departmentId'] ?? null),
-                    ]))) ?>" class="report-row transition-colors <?= $isNew ? 'bg-amber-50 hover:bg-amber-100/70' : 'hover:bg-slate-50' ?>"<?= $style !== '' ? ' style="' . $style . '"' : '' ?>>
+                    ]))) ?>" class="report-row transition-colors <?= $rowBg ?>"<?= $style !== '' ? ' style="' . $style . '"' : '' ?>>
                     <td class="px-4 py-3.5 font-mono text-xs text-slate-500 sm:px-6"><?= htmlspecialchars(substr($report['id'], 0, 8)) ?></td>
                     <td class="px-4 py-3.5">
                         <strong class="text-slate-800"><?= htmlspecialchars($report['category']) ?></strong>
@@ -316,7 +329,7 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                     <td class="whitespace-nowrap px-4 py-3.5 text-xs text-slate-500"><?= htmlspecialchars($report['createdAtFormatted']) ?></td>
                     <td class="px-4 py-3.5">
                         <span class="inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize <?= $row['pill'] ?>">
-                            <?= htmlspecialchars($report['status']) ?>
+                            <?= htmlspecialchars(ucwords($report['status'])) ?>
                         </span>
                     </td>
                     <td class="px-4 py-3.5 text-right sm:px-6">
@@ -336,10 +349,12 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
     <div data-sort-list class="divide-y divide-slate-100 border-t border-slate-100 sm:hidden">
         <?php foreach ($items as $row):
             $report = $row['report'];
-            $isNew  = ($row['filter'] === 'pending');
+            $isNew  = ($row['filter'] === 'for review');
+            $isPend = ($row['filter'] === 'pending');
             $closed = in_array($row['filter'], ['resolved', 'rejected'], true);
             $hide   = ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus);
             $style  = ($hide ? 'display:none;' : '');
+            $rowBg  = $isNew ? 'bg-indigo-50' : ($isPend ? 'bg-amber-50' : '');
         ?>
             <div data-id="<?= htmlspecialchars($report['id']) ?>" data-ts="<?= (int) $report['createdAtTs'] ?>" data-status="<?= htmlspecialchars($row['filter']) ?>" data-search="<?= htmlspecialchars(strtolower(implode(' ', [
                     $report['id'],
@@ -351,13 +366,13 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                     $report['barangay'],
                     $report['assignedAdminName'],
                     department_name($db, $report['departmentId'] ?? null),
-                ]))) ?>" class="report-row p-4 <?= $isNew ? 'bg-amber-50' : '' ?>"<?= $style !== '' ? ' style="' . $style . '"' : '' ?>>
+                ]))) ?>" class="report-row p-4 <?= $rowBg ?>"<?= $style !== '' ? ' style="' . $style . '"' : '' ?>>
                 <div class="flex items-start justify-between gap-3">
                     <strong class="min-w-0 truncate text-slate-900">
                         <?= htmlspecialchars($report['category']) ?>
                     </strong>
                     <span class="inline-block shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize <?= $row['pill'] ?>">
-                        <?= htmlspecialchars($report['status']) ?>
+                        <?= htmlspecialchars(ucwords($report['status'])) ?>
                     </span>
                 </div>
                 <p class="mt-1 text-xs text-slate-600">
@@ -707,9 +722,10 @@ const MAX_RESOLUTION_BYTES = 5 * 1024 * 1024;
 const RESOLUTION_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 const STATUS_META = {
-    "pending":  { color: "#f59e0b", label: "Pending" },
-    "resolved": { color: "#22c55e", label: "Resolved" },
-    "rejected": { color: "#ef4444", label: "Rejected" }
+    "for review": { color: "#6366f1", label: "For Review" },
+    "pending":    { color: "#f59e0b", label: "Pending" },
+    "resolved":   { color: "#22c55e", label: "Resolved" },
+    "rejected":   { color: "#ef4444", label: "Rejected" }
 };
 
 let currentReport = null;
@@ -741,7 +757,7 @@ document.addEventListener("keydown", function (event) {
     }
 }, true);
 
-// Old "in progress" (and anything unknown) counts as pending.
+// "for review" behaves like a new/unassigned report in the modal UI.
 function normStatus(raw) {
     const s = String(raw || "pending").toLowerCase().replace(/_/g, " ").trim();
     return STATUS_META[s] ? s : "pending";
@@ -797,7 +813,10 @@ function refreshStatusUI() {
     const notes = document.getElementById("modal-notes");
     const assignBtn = document.getElementById("assign-btn");
 
-    const status = normStatus(currentReport.status);
+    // Ituring na "pending" ang "for review" pagdating sa actions sa modal
+    const rawStatus = normStatus(currentReport.status);
+    const status = rawStatus === "for review" ? "pending" : rawStatus;
+    
     const closed = isClosedStatus(status);
     const previous = hidden.value;
 
