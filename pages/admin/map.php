@@ -163,6 +163,9 @@ $activePage = 'map';
                 <div class="flex shrink-0 items-center gap-2">
                     <select id="map-status-filter" aria-label="Filter reports by status" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100">
                         <option value="pending" selected>Pending</option>
+                        <?php if ($IS_SUPER_ADMIN): ?>
+                            <option value="for_review">For Review</option>
+                        <?php endif; ?>
                         <option value="all">All</option>
                         <option value="resolved">Resolved</option>
                         <option value="rejected">Rejected</option>
@@ -209,25 +212,35 @@ const boundary = <?= json_encode(
     JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
 ) ?>;
 
+const IS_SUPER_ADMIN = <?= json_encode((bool) $IS_SUPER_ADMIN) ?>;
+
 const SAMPALOC_CENTER = [14.6031, 121.0022];
 
 const STATUS_COLORS = {
+    "for_review":  "#6366f1",
     "pending":     "#f59e0b",
     "resolved":    "#22c55e",
     "rejected":    "#ef4444"
 };
 
 const STATUS_LABELS = {
+    "for_review":  "For Review",
     "pending":     "Pending",
     "resolved":    "Resolved",
     "rejected":    "Rejected"
 };
 
+// Statuses listed in the legend. "For Review" is only for the super admin
+// (admins only get assigned reports, which are never For Review).
+const LEGEND_KEYS = IS_SUPER_ADMIN
+    ? ["for_review", "pending", "resolved", "rejected"]
+    : ["pending", "resolved", "rejected"];
+
 const IS_TOUCH = window.matchMedia("(pointer: coarse)").matches;
 
 // Normalize a raw status the same way reports.php does.
 function normalizeStatus(raw) {
-    const s = String(raw || "pending").toLowerCase().replace(/_/g, " ").trim();
+    const s = String(raw || "pending").toLowerCase().trim().replace(/[\s-]+/g, "_");
     return STATUS_COLORS.hasOwnProperty(s) ? s : "pending";
 }
 
@@ -341,7 +354,7 @@ const legendEl = L.DomUtil.create("div", "map-legend");
 
 function renderLegend(counts) {
     let html = "<h4>Legend</h4>";
-    Object.keys(STATUS_LABELS).forEach(function(key) {
+    LEGEND_KEYS.forEach(function(key) {
         html += "<div class='legend-row'><span class='legend-name'>" +
                 "<span class='legend-dot' style='background:" + STATUS_COLORS[key] + "'></span>" +
                 STATUS_LABELS[key] + "</span>" +
@@ -361,7 +374,7 @@ function matchesFilter(status, filter) {
 }
 
 function applyMapFilter(filter) {
-    const counts = { "pending": 0, "resolved": 0, "rejected": 0 };
+    const counts = { "for_review": 0, "pending": 0, "resolved": 0, "rejected": 0 };
     let visible = 0;
 
     map.closePopup();
@@ -384,7 +397,7 @@ function applyMapFilter(filter) {
 const filterSelect = document.getElementById("map-status-filter");
 filterSelect.addEventListener("change", function() { applyMapFilter(this.value); });
 
-// Default view: Active (pending + in progress)
+// Default view: Pending
 applyMapFilter(filterSelect.value);
 
 setTimeout(function() { map.invalidateSize(); }, 100);

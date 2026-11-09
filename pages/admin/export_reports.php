@@ -60,8 +60,9 @@ $bounds     = citifix_range_bounds($range);
 $periodLabel = $bounds['period'];
 
 $statusFilter = strtolower(trim($_GET['status'] ?? 'all'));
-if ($statusFilter === 'in_progress' || $statusFilter === 'in progress') $statusFilter = 'pending';
-if (!in_array($statusFilter, ['all', 'pending', 'resolved', 'rejected'], true)) {
+$statusFilter = str_replace([' ', '-'], '_', $statusFilter);
+if ($statusFilter === 'in_progress') $statusFilter = 'pending';
+if (!in_array($statusFilter, ['all', 'for_review', 'pending', 'resolved', 'rejected'], true)) {
     $statusFilter = 'all';
 }
 
@@ -90,8 +91,8 @@ foreach ($query->documents() as $doc) {
     }
 
     $status = strtolower(trim($data['status'] ?? 'pending'));
-    $status = str_replace('_', ' ', $status);
-    if (!in_array($status, ['pending', 'resolved', 'rejected'], true)) $status = 'pending';
+    $status = str_replace([' ', '-'], '_', $status);
+    if (!in_array($status, ['for_review', 'pending', 'resolved', 'rejected'], true)) $status = 'pending';
 
     if ($statusFilter !== 'all' && $status !== $statusFilter) continue;
 
@@ -123,7 +124,7 @@ foreach ($query->documents() as $doc) {
 usort($rows, fn($a, $b) => $b['ts'] <=> $a['ts']);
 
 $total      = count($rows);
-$counts = ['pending' => 0, 'resolved' => 0, 'rejected' => 0];
+$counts = ['for_review' => 0, 'pending' => 0, 'resolved' => 0, 'rejected' => 0];
 $categories = [];
 
 foreach ($rows as $r) {
@@ -133,6 +134,7 @@ foreach ($rows as $r) {
 arsort($categories);
 
 $statusStyle = [
+    'for_review'  => ['bg' => 'E0E7FF', 'fg' => '3730A3', 'label' => 'For Review'],
     'pending'     => ['bg' => 'FEF3C7', 'fg' => '92400E', 'label' => 'Pending'],
     'resolved'    => ['bg' => 'DCFCE7', 'fg' => '166534', 'label' => 'Resolved'],
     'rejected'    => ['bg' => 'FEE2E2', 'fg' => '991B1B', 'label' => 'Rejected'],
@@ -151,6 +153,16 @@ $meta[] = ['Generated on', $now->format('F j, Y · g:i A')];
 
 $BRAND = '1D4ED8';
 $NAVY  = '1E3A8A';
+
+// Summary cards shared by PDF, Excel and Word: [label, value, background, text color] (hex, no "#").
+// "For Review" only exists for the super admin (admins only get assigned reports).
+$cardSpecs = [['Total Reports', $total, 'DBEAFE', $NAVY]];
+if ($IS_SUPER_ADMIN) {
+    $cardSpecs[] = ['For Review', $counts['for_review'], 'E0E7FF', '3730A3'];
+}
+$cardSpecs[] = ['Pending',  $counts['pending'],  'FEF3C7', '92400E'];
+$cardSpecs[] = ['Resolved', $counts['resolved'], 'DCFCE7', '166534'];
+$cardSpecs[] = ['Rejected', $counts['rejected'], 'FEE2E2', '991B1B'];
 
 $fileBase = 'CitiFix_Reports_' . $range . ($statusFilter !== 'all' ? '_' . str_replace(' ', '-', $statusFilter) : '') . '_' . $now->format('Y-m-d');
 
@@ -178,12 +190,11 @@ if ($format === 'pdf') {
         die('Dompdf is not installed. Run: composer require dompdf/dompdf');
     }
 
-    $cardDefs = [
-        ['Total Reports', $total,                 '#dbeafe', '#1e3a8a'],
-        ['Pending',       $counts['pending'],     '#fef3c7', '#92400e'],
-        ['Resolved',      $counts['resolved'],    '#dcfce7', '#166534'],
-        ['Rejected',      $counts['rejected'],    '#fee2e2', '#991b1b'],
-    ];
+    // Same cards as Word / Excel, with "#" colors for CSS
+    $cardDefs = array_map(function ($c) {
+        return [$c[0], $c[1], '#' . $c[2], '#' . $c[3]];
+    }, $cardSpecs);
+    $cardWidth = (int) floor(100 / count($cardDefs));
 
     // column widths (%), each layout adds up to 100
     $cols = $IS_SUPER_ADMIN
@@ -239,7 +250,7 @@ if ($format === 'pdf') {
 <table class="cards">
     <tr>
         <?php foreach ($cardDefs as $i => [$label, $value, $bg, $fg]): ?>
-            <td class="<?= $i === 4 ? 'last' : '' ?>" style="background: <?= $bg ?>; color: <?= $fg ?>; width: 20%;">
+            <td class="<?= $i === count($cardDefs) - 1 ? 'last' : '' ?>" style="background: <?= $bg ?>; color: <?= $fg ?>; width: <?= $cardWidth ?>%;">
                 <div class="lbl"><?= e($label) ?></div>
                 <div class="num"><?= e($value) ?></div>
             </td>
@@ -392,13 +403,7 @@ if ($format === 'xlsx') {
 
         // Summary cards
         $row++;
-        $xCards = [
-            ['Total Reports', $total,                 'DBEAFE', $NAVY],
-            ['Pending',       $counts['pending'],     'FEF3C7', '92400E'],
-            ['Resolved',      $counts['resolved'],    'DCFCE7', '166534'],
-            ['Rejected',      $counts['rejected'],    'FEE2E2', '991B1B'],
-        ];
-        foreach ($xCards as $i => [$label, $value, $bg, $fg]) {
+        foreach ($cardSpecs as $i => [$label, $value, $bg, $fg]) {
             $col = Coordinate::stringFromColumnIndex($i + 1);
             $put($s, "{$col}{$row}", $label);
             $s->setCellValue($col . ($row + 1), $value);
@@ -561,17 +566,10 @@ foreach ($meta as [$k, $v]) {
 $section->addTextBreak(1, ['size' => 6]);
 
 // ---- Summary cards ----
-$cards = [
-    ['Total Reports', $total,                  'DBEAFE', $NAVY],
-    ['Pending',       $counts['pending'],      'FEF3C7', '92400E'],
-    ['Resolved',      $counts['resolved'],     'DCFCE7', '166534'],
-    ['Rejected',      $counts['rejected'],     'FEE2E2', '991B1B'],
-];
-
 $summary = $section->addTable(['borderSize' => 18, 'borderColor' => 'FFFFFF', 'cellMargin' => 140]);
 $summary->addRow();
 $cardW = (int) ($contentW / 5);
-foreach ($cards as [$label, $value, $bg, $fg]) {
+foreach ($cardSpecs as [$label, $value, $bg, $fg]) {
     $c = $summary->addCell($cardW, ['bgColor' => $bg]);
     $c->addText($label, ['size' => 9, 'bold' => true, 'color' => $fg]);
     $c->addText((string) $value, ['size' => 24, 'bold' => true, 'color' => $fg]);

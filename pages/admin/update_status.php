@@ -89,8 +89,8 @@ $reportId   = trim($_POST['report_id'] ?? '');
 $status     = strtolower(trim($_POST['status'] ?? ''));
 $adminNotes = trim($_POST['admin_notes'] ?? '');
 
-// "in progress" no longer exists
-$allowedStatuses = ['pending', 'resolved', 'rejected'];
+// "in progress" no longer exists. for_review is the initial status of a new report.
+$allowedStatuses = ['for_review', 'pending', 'resolved', 'rejected'];
 
 if ($reportId === '' || !in_array($status, $allowedStatuses, true)) {
     upd_fail('Invalid report or status.');
@@ -117,18 +117,18 @@ try {
     }
 
     // Status the report had before this save. Old "in progress" counts as pending.
-    $previousStatus = strtolower(str_replace('_', ' ', trim((string) ($current['status'] ?? 'pending'))));
-    if (!in_array($previousStatus, ['pending', 'resolved', 'rejected'], true)) {
+    $previousStatus = strtolower(str_replace([' ', '-'], '_', trim((string) ($current['status'] ?? 'pending'))));
+    if (!in_array($previousStatus, ['for_review', 'pending', 'resolved', 'rejected'], true)) {
         $previousStatus = 'pending';
     }
 
     // 🔒 Closed (resolved / rejected) reports: only the super admin can still edit or reopen them
-    $isClosed = ($previousStatus !== 'pending');
+    $isClosed = in_array($previousStatus, ['resolved', 'rejected'], true);
     if ($isClosed && !$IS_SUPER_ADMIN) {
         upd_fail('This report is already closed and can no longer be edited.');
     }
 
-    // Does this save change the status? (e.g. pending -> rejected, or reopening to pending)
+    // Does this save change the status? (e.g. for_review -> pending, pending -> rejected, or reopening to pending)
     $statusChanged = ($previousStatus !== $status);
 
     // 🔒 Role rules
@@ -137,6 +137,11 @@ try {
         $resultingAssigned = isset($_POST['assigned_admin_id'])
             ? trim((string) $_POST['assigned_admin_id'])
             : $currentAssigned;
+
+        // For Review only exists while the report has no admin in charge.
+        if ($status === 'for_review' && $resultingAssigned !== '') {
+            upd_fail('Assigned reports stay Pending. For Review is only for unassigned reports.');
+        }
 
         if ($statusChanged) {
             // Super admin never resolves. Rejecting is only possible while unassigned.
@@ -147,11 +152,15 @@ try {
             if ($status === 'rejected' && $resultingAssigned !== '') {
                 upd_fail('Assigned reports stay Pending. Only the assigned admin can resolve or reject them.');
             }
+            // A report leaves For Review by being assigned (it becomes Pending) or rejected.
+            if ($status === 'pending' && $previousStatus === 'for_review' && $resultingAssigned === '') {
+                upd_fail('Assign this report to an admin first. A report in For Review becomes Pending once it is assigned.');
+            }
         } elseif ($isClosed && $resultingAssigned !== '' && $resultingAssigned !== $currentAssigned) {
             upd_fail('Assigning a closed report reopens it. Set the status to Pending first.');
         }
     } else {
-        // Assigned admin: Resolved or Rejected only
+        // Assigned admin: Resolved or Rejected only (For Review is super admin only)
         if (!in_array($status, ['resolved', 'rejected'], true)) {
             upd_fail('Please choose Resolved or Rejected.');
         }
@@ -275,12 +284,12 @@ try {
         );
 
     // 🔔 Push to the report owner — only when the status really changed
-    // (never for "pending", same as the in-app notification list).
+    // (never for "for_review" or "pending", same as the in-app notification list).
     // Best effort: the report is already saved, so a push failure must not
     // turn the update into an error.
     $pushFailed = false;
 
-    if ($statusChanged && $status !== 'pending') {
+    if ($statusChanged && !in_array($status, ['for_review', 'pending'], true)) {
         $ownerId = (string) ($current['userId'] ?? '');
 
         try {

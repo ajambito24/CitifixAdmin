@@ -8,14 +8,15 @@ require_once __DIR__ . '/../utils/icons_util.php';
 $reports = [];
 
 /**
- * Only three statuses exist now. Old "in progress" reports (and anything
- * unknown) are shown as Pending, no database migration needed.
+ * Four statuses exist: for_review (new, waiting for the super admin), pending
+ * (assigned to an admin), resolved and rejected. Old "in progress" reports (and
+ * anything unknown) are shown as Pending, no database migration needed.
  */
 function dash_norm_status($raw): string
 {
     $s = strtolower(trim((string) ($raw ?? 'pending')));
-    $s = str_replace('_', ' ', $s);
-    return in_array($s, ['pending', 'resolved', 'rejected'], true) ? $s : 'pending';
+    $s = str_replace([' ', '-'], '_', $s);
+    return in_array($s, ['for_review', 'pending', 'resolved', 'rejected'], true) ? $s : 'pending';
 }
 
 try {
@@ -47,19 +48,18 @@ try {
 
 $totalReports = count($reports);
 
+$forReview  = 0; // new reports waiting for the super admin to assign or reject them
 $pending    = 0;
 $resolved   = 0;
 $rejected   = 0;
-$newReports = 0; // pending and not assigned to any admin yet (super admin only)
 
 foreach ($reports as $report) {
     $status = $report['status'];
 
-    if ($status === 'pending') {
+    if ($status === 'for_review') {
+        $forReview++;
+    } elseif ($status === 'pending') {
         $pending++;
-        if (empty($report['assignedAdminId'])) {
-            $newReports++;
-        }
     } elseif ($status === 'resolved') {
         $resolved++;
     } elseif ($status === 'rejected') {
@@ -155,11 +155,11 @@ $chartValues = array_values($bucketCounts);
 $activePage = 'dashboard';
 
 // [label, value, icon, tint, link]
-// Total -> Reports page, All filter. New -> Reports page, Pending filter, newest first.
+// Total -> Reports page, All filter. For Review -> Reports page, For Review filter, newest first.
 $statCards = [];
 $statCards[] = ['Total Reports', $totalReports, 'clipboard-data', 'bg-blue-100 text-blue-700', 'reports.php?status=all'];
 if ($IS_SUPER_ADMIN) {
-    $statCards[] = ['New Reports', $newReports, 'clipboard-data', 'bg-indigo-100 text-indigo-700', 'reports.php?status=pending&sort=newest'];
+    $statCards[] = ['For Review', $forReview, 'clipboard-data', 'bg-indigo-100 text-indigo-700', 'reports.php?status=for_review&sort=newest'];
 }
 $statCards[] = ['Pending',  $pending,  'hourglass-split', 'bg-amber-100 text-amber-700', 'reports.php?status=pending'];
 $statCards[] = ['Resolved', $resolved, 'check-circle',    'bg-green-100 text-green-700', 'reports.php?status=resolved'];
@@ -168,9 +168,10 @@ $statCards[] = ['Rejected', $rejected, 'x-circle',        'bg-red-100 text-red-7
 $gridCols = count($statCards) === 5 ? 'xl:grid-cols-5' : 'xl:grid-cols-4';
 
 $pillMap = [
-    'pending'  => 'bg-amber-100 text-amber-800 border-amber-200',
-    'resolved' => 'bg-green-100 text-green-800 border-green-200',
-    'rejected' => 'bg-red-100 text-red-800 border-red-200',
+    'for_review' => 'bg-indigo-100 text-indigo-800 border-indigo-200',
+    'pending'    => 'bg-amber-100 text-amber-800 border-amber-200',
+    'resolved'   => 'bg-green-100 text-green-800 border-green-200',
+    'rejected'   => 'bg-red-100 text-red-800 border-red-200',
 ];
 
 /**
@@ -208,7 +209,7 @@ function dash_report_table(array $items, array $pillMap): void
                     </td>
                     <td class="px-4 py-3.5 sm:px-6">
                         <span class="inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold <?= $pill ?>">
-                            <?= htmlspecialchars(ucfirst($status)) ?>
+                            <?= htmlspecialchars(ucwords(str_replace('_', ' ', $status))) ?>
                         </span>
                     </td>
                 </tr>
@@ -437,6 +438,9 @@ function dash_report_table(array $items, array $pillMap): void
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
                     <select id="dash-status" aria-label="Report status" onchange="dashFilter(this.value)" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100">
+                        <?php if ($IS_SUPER_ADMIN): ?>
+                            <option value="for_review">For Review (<?= $forReview ?>)</option>
+                        <?php endif; ?>
                         <option value="pending" selected>Pending (<?= $pending ?>)</option>
                         <option value="resolved">Resolved (<?= $resolved ?>)</option>
                         <option value="rejected">Rejected (<?= $rejected ?>)</option>
@@ -469,6 +473,7 @@ function dash_report_table(array $items, array $pillMap): void
 
         <script>
         const DASH_TITLES = {
+            "for_review": "For Review Reports",
             "pending": "Pending Reports",
             "resolved": "Resolved Reports",
             "rejected": "Rejected Reports",

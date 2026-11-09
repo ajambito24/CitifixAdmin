@@ -44,14 +44,20 @@ function citifix_parse_firebase_date($value): ?\DateTime
 }
 
 /**
- * Only three statuses exist: pending, resolved, rejected.
+ * Four statuses exist: for_review, pending, resolved, rejected.
  * Old "in progress" reports (and anything unknown) are shown as Pending.
  */
 function citifix_norm_status($raw): string
 {
     $s = strtolower(trim((string) ($raw ?? 'pending')));
-    $s = str_replace('_', ' ', $s);
-    return in_array($s, ['pending', 'resolved', 'rejected'], true) ? $s : 'pending';
+    $s = str_replace([' ', '-'], '_', $s);
+    return in_array($s, ['for_review', 'pending', 'resolved', 'rejected'], true) ? $s : 'pending';
+}
+
+// "for_review" -> "For Review"
+function citifix_status_label(string $status): string
+{
+    return ucwords(str_replace('_', ' ', $status));
 }
 
 $reports = [];
@@ -88,8 +94,8 @@ try {
 
         if (is_array($historyRaw)) {
             foreach ($historyRaw as $entry) {
-                $entryStatus = strtolower(str_replace('_', ' ', (string) ($entry['status'] ?? '')));
-                if ($entryStatus === 'in progress') {
+                $entryStatus = strtolower(str_replace([' ', '-'], '_', trim((string) ($entry['status'] ?? ''))));
+                if ($entryStatus === 'in_progress') {
                     continue;
                 }
                 $entryAt = $entry['at'] ?? null;
@@ -192,28 +198,32 @@ unset($_SESSION['flash']);
 $activePage = 'reports';
 
 $statusClasses = [
-    'pending'  => 'bg-amber-100 text-amber-800 border-amber-200',
-    'resolved' => 'bg-green-100 text-green-800 border-green-200',
-    'rejected' => 'bg-red-100 text-red-800 border-red-200',
+    'for_review' => 'bg-indigo-100 text-indigo-800 border-indigo-200',
+    'pending'    => 'bg-amber-100 text-amber-800 border-amber-200',
+    'resolved'   => 'bg-green-100 text-green-800 border-green-200',
+    'rejected'   => 'bg-red-100 text-red-800 border-red-200',
 ];
 
 // Status filter (default: pending). Filtering happens client-side; this only sets the initial state.
-$statusOptions = [
-    'pending'  => 'Pending',
-    'resolved' => 'Resolved',
-    'rejected' => 'Rejected',
-    'all'      => 'All',
-];
+// "For Review" is only offered to the super admin (admins only get assigned reports).
+$statusOptions = [];
+if ($IS_SUPER_ADMIN) {
+    $statusOptions['for_review'] = 'For Review';
+}
+$statusOptions['pending']  = 'Pending';
+$statusOptions['resolved'] = 'Resolved';
+$statusOptions['rejected'] = 'Rejected';
+$statusOptions['all']      = 'All';
 
 $selectedStatus = strtolower(trim($_GET['status'] ?? 'pending'));
-$selectedStatus = str_replace('_', ' ', $selectedStatus);
-if ($selectedStatus === 'in progress') $selectedStatus = 'pending';
+$selectedStatus = str_replace([' ', '-'], '_', $selectedStatus);
+if ($selectedStatus === 'in_progress') $selectedStatus = 'pending';
 if (!array_key_exists($selectedStatus, $statusOptions)) {
     $selectedStatus = 'pending';
 }
 
 $rows = [];
-$statusCounts = ['pending' => 0, 'resolved' => 0, 'rejected' => 0];
+$statusCounts = ['for_review' => 0, 'pending' => 0, 'resolved' => 0, 'rejected' => 0];
 
 foreach ($reports as $report) {
     $status = $report['status'];
@@ -227,25 +237,28 @@ foreach ($reports as $report) {
     ];
 }
 
-// Pending (needs action) rows go on top, in the chosen date order.
+// Reports that still need action (for review / pending) go on top, in the chosen date order.
 // usort is stable in PHP 8+, so the date order is preserved inside each group.
 usort($rows, function ($a, $b) {
-    return (int) ($b['filter'] === 'pending') <=> (int) ($a['filter'] === 'pending');
+    $needsA = (int) in_array($a['filter'], ['for_review', 'pending'], true);
+    $needsB = (int) in_array($b['filter'], ['for_review', 'pending'], true);
+    return $needsB <=> $needsA;
 });
 
 $countAll = count($rows);
 $visibleCount = $selectedStatus === 'all' ? $countAll : $statusCounts[$selectedStatus];
 
 $statusTitles = [
-    'pending'  => 'Pending Reports',
-    'resolved' => 'Resolved Reports',
-    'rejected' => 'Rejected Reports',
-    'all'      => 'All Reports',
+    'for_review' => 'For Review Reports',
+    'pending'    => 'Pending Reports',
+    'resolved'   => 'Resolved Reports',
+    'rejected'   => 'Rejected Reports',
+    'all'        => 'All Reports',
 ];
 
 /**
  * Renders one set of reports: a table (sm and up) and cards (below sm).
- * Pending reports are highlighted (amber) so admins can tell they still need action.
+ * Reports that still need action (for review / pending) are highlighted (amber).
  */
 function render_report_rows(array $items, string $emptyText = 'No reports.'): void
 {
@@ -282,7 +295,7 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
             <tbody data-sort-list class="divide-y divide-slate-100">
             <?php foreach ($items as $row):
                 $report = $row['report'];
-                $isNew  = ($row['filter'] === 'pending');
+                $isNew  = in_array($row['filter'], ['for_review', 'pending'], true);
                 $closed = in_array($row['filter'], ['resolved', 'rejected'], true);
                 $hide   = ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus);
                 $style  = ($hide ? 'display:none;' : '');
@@ -315,8 +328,8 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                     <td class="px-4 py-3.5 text-slate-700"><?= htmlspecialchars($report['userFullName']) ?></td>
                     <td class="whitespace-nowrap px-4 py-3.5 text-xs text-slate-500"><?= htmlspecialchars($report['createdAtFormatted']) ?></td>
                     <td class="px-4 py-3.5">
-                        <span class="inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize <?= $row['pill'] ?>">
-                            <?= htmlspecialchars($report['status']) ?>
+                        <span class="inline-block whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold <?= $row['pill'] ?>">
+                            <?= htmlspecialchars(citifix_status_label($report['status'])) ?>
                         </span>
                     </td>
                     <td class="px-4 py-3.5 text-right sm:px-6">
@@ -336,7 +349,7 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
     <div data-sort-list class="divide-y divide-slate-100 border-t border-slate-100 sm:hidden">
         <?php foreach ($items as $row):
             $report = $row['report'];
-            $isNew  = ($row['filter'] === 'pending');
+            $isNew  = in_array($row['filter'], ['for_review', 'pending'], true);
             $closed = in_array($row['filter'], ['resolved', 'rejected'], true);
             $hide   = ($selectedStatus !== 'all' && $row['filter'] !== $selectedStatus);
             $style  = ($hide ? 'display:none;' : '');
@@ -356,8 +369,8 @@ function render_report_rows(array $items, string $emptyText = 'No reports.'): vo
                     <strong class="min-w-0 truncate text-slate-900">
                         <?= htmlspecialchars($report['category']) ?>
                     </strong>
-                    <span class="inline-block shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize <?= $row['pill'] ?>">
-                        <?= htmlspecialchars($report['status']) ?>
+                    <span class="inline-block shrink-0 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold <?= $row['pill'] ?>">
+                        <?= htmlspecialchars(citifix_status_label($report['status'])) ?>
                     </span>
                 </div>
                 <p class="mt-1 text-xs text-slate-600">
@@ -707,9 +720,10 @@ const MAX_RESOLUTION_BYTES = 5 * 1024 * 1024;
 const RESOLUTION_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 const STATUS_META = {
-    "pending":  { color: "#f59e0b", label: "Pending" },
-    "resolved": { color: "#22c55e", label: "Resolved" },
-    "rejected": { color: "#ef4444", label: "Rejected" }
+    "for_review": { color: "#6366f1", label: "For Review" },
+    "pending":    { color: "#f59e0b", label: "Pending" },
+    "resolved":   { color: "#22c55e", label: "Resolved" },
+    "rejected":   { color: "#ef4444", label: "Rejected" }
 };
 
 let currentReport = null;
@@ -743,7 +757,7 @@ document.addEventListener("keydown", function (event) {
 
 // Old "in progress" (and anything unknown) counts as pending.
 function normStatus(raw) {
-    const s = String(raw || "pending").toLowerCase().replace(/_/g, " ").trim();
+    const s = String(raw || "pending").toLowerCase().trim().replace(/[\s-]+/g, "_");
     return STATUS_META[s] ? s : "pending";
 }
 
@@ -839,6 +853,7 @@ function refreshStatusUI() {
         hidden.value = sel.value;
     } else if (IS_SUPER_ADMIN) {
         const assigned = document.getElementById("modal-assigned").value !== "";
+        const wasAssigned = (currentReport.assignedAdminId || "") !== "";
 
         if (assigned) {
             add("pending", "Pending");
@@ -847,11 +862,24 @@ function refreshStatusUI() {
             hidden.value = "pending";
             hint.textContent = "Assigned reports stay Pending until the admin resolves or rejects them.";
         } else {
-            add("pending", "Pending");
+            // Older reports that are already Pending and unassigned keep their Pending option.
+            const legacyPending = (status === "pending" && !wasAssigned);
+
+            add("for_review", "For Review");
+            if (legacyPending) add("pending", "Pending");
             add("rejected", "Rejected");
-            sel.value = (previous === "rejected") ? "rejected" : "pending";
+
+            // Unassigning an assigned (Pending) report sends it back to For Review.
+            let pick;
+            if (previous === "rejected" || previous === "for_review" || (previous === "pending" && legacyPending)) {
+                pick = previous;
+            } else {
+                pick = legacyPending ? "pending" : "for_review";
+            }
+
+            sel.value = pick;
             hidden.value = sel.value;
-            hint.textContent = "Not assigned yet: assign it to an admin, or reject it.";
+            hint.textContent = "Not assigned yet: assign it to an admin (it becomes Pending), or reject it.";
         }
     } else {
         add("", "Select action…");
@@ -1062,7 +1090,7 @@ function closeAssignList() {
             document.getElementById("modal-assigned").value = opt.dataset.value;
             renderAssignLabel(opt.dataset.name, opt.dataset.dept);
             closeAssignList();
-            // Assigning locks the status to Pending; unassigning allows Reject again.
+            // Assigning locks the status to Pending; unassigning allows For Review / Reject again.
             refreshStatusUI();
         });
     });
