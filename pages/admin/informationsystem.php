@@ -44,8 +44,8 @@ $settingsRows = [
                     <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"/></svg>
                 </button>
                 <div class="min-w-0">
-                    <h1 class="truncate text-lg font-extrabold tracking-tight text-slate-900 sm:text-xl">Settings</h1>
-                    <p class="truncate text-xs text-slate-500 sm:text-sm">CitiFix administrator settings</p>
+                    <h1 class="truncate text-lg font-extrabold tracking-tight text-slate-900 sm:text-xl">Information System</h1>
+                    <p class="truncate text-xs text-slate-500 sm:text-sm">CitiFix Information System</p>
                 </div>
             </div>
 
